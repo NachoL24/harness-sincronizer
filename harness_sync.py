@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 HARNESSES = ("claude", "codex")
@@ -99,3 +100,35 @@ def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str]
     man = load_manifest(paths.manifest)
     man["skills"][name] = {"targets": list(targets)}
     save_manifest(paths.manifest, man)
+
+
+def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = False) -> list[str]:
+    src = paths.repo_skills / name
+    src_hash = skill_hash(src)
+    changes: list[str] = []
+    for h in HARNESSES:
+        if h not in targets:
+            continue
+        dst = paths.harness_skills[h] / name
+        if dst.is_dir() and skill_hash(dst) == src_hash:
+            continue
+        changes.append(f"{name} -> {h}")
+        if dry_run:
+            continue
+        if dst.exists():
+            backup = paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S") / h / name
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(dst, backup)
+        copy_skill(src, dst)
+    return changes
+
+
+def apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
+    man = load_manifest(paths.manifest)
+    changes: list[str] = []
+    for name, cfg in sorted(man["skills"].items()):
+        targets = cfg.get("targets", [])
+        if "ignore" in targets:
+            continue
+        changes += apply_skill(paths, name, targets, dry_run)
+    return changes

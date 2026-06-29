@@ -108,6 +108,51 @@ def test_adopt_skill_imports_and_records():
         assert man["skills"]["gamma"] == {"targets": ["claude", "codex"]}
 
 
+def test_apply_pushes_backs_up_and_is_idempotent():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "delta", {"SKILL.md": "new"})
+        _make_skill(p.harness_skills["codex"], "delta", {"SKILL.md": "old"})
+
+        changes = hs.apply_skill(p, "delta", ["codex"])
+        assert changes == ["delta -> codex"]
+        assert (p.harness_skills["codex"] / "delta" / "SKILL.md").read_text() == "new"
+        backups = list(p.backups.rglob("delta/SKILL.md"))
+        assert backups and backups[0].read_text() == "old"
+
+        assert hs.apply_skill(p, "delta", ["codex"]) == []
+
+
+def test_apply_dry_run_writes_nothing():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "eps", {"SKILL.md": "new"})
+        changes = hs.apply_skill(p, "eps", ["claude"], dry_run=True)
+        assert changes == ["eps -> claude"]
+        assert not (p.harness_skills["claude"] / "eps").exists()
+
+
+def test_apply_all_skips_ignored_and_leaves_untracked():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "keep", {"SKILL.md": "k"})
+        _make_skill(p.repo_skills, "skip", {"SKILL.md": "s"})
+        hs.save_manifest(p.manifest, {"skills": {
+            "keep": {"targets": ["claude"]},
+            "skip": {"targets": ["ignore"]},
+        }})
+        _make_skill(p.harness_skills["claude"], "foreign", {"SKILL.md": "f"})
+
+        changes = hs.apply_all(p)
+        assert changes == ["keep -> claude"]
+        assert (p.harness_skills["claude"] / "keep").exists()
+        assert not (p.harness_skills["claude"] / "skip").exists()
+        assert (p.harness_skills["claude"] / "foreign" / "SKILL.md").read_text() == "f"
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
