@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,3 +52,13 @@ def scan(skills_dir: Path) -> dict[str, str]:
     if not skills_dir.is_dir():
         return {}
     return {d.name: skill_hash(d) for d in sorted(skills_dir.iterdir()) if d.is_dir()}
+
+
+def load_manifest(path: Path) -> dict:
+    if not path.exists():
+        return {"skills": {}}
+    return json.loads(path.read_text())
+
+
+def save_manifest(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")

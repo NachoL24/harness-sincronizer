@@ -53,6 +53,20 @@ def test_resolve_paths_honors_env():
             del os.environ["CODEX_HOME"]
 
 
+def test_load_manifest_absent_returns_empty():
+    with tempfile.TemporaryDirectory() as t:
+        assert hs.load_manifest(Path(t) / "manifest.json") == {"skills": {}}
+
+
+def test_manifest_roundtrip():
+    with tempfile.TemporaryDirectory() as t:
+        p = Path(t) / "manifest.json"
+        data = {"skills": {"branch-pr": {"targets": ["claude", "codex"]}}}
+        hs.save_manifest(p, data)
+        assert hs.load_manifest(p) == data
+        assert p.read_text().endswith("\n")
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
