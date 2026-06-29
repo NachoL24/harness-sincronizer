@@ -67,6 +67,34 @@ def test_manifest_roundtrip():
         assert p.read_text().endswith("\n")
 
 
+def _paths_in(t: Path) -> "hs.Paths":
+    return hs.Paths(
+        repo_skills=t / "repo" / "skills",
+        manifest=t / "repo" / "manifest.json",
+        backups=t / "repo" / ".backups",
+        harness_skills={"claude": t / "cc" / "skills", "codex": t / "cx" / "skills"},
+    )
+
+
+def test_compute_states_covers_all_cases():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "v1"})
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "v1"})
+        _make_skill(p.harness_skills["codex"], "alpha", {"SKILL.md": "OLD"})
+        _make_skill(p.harness_skills["codex"], "beta", {"SKILL.md": "x"})
+
+        rows = {r["name"]: r for r in hs.compute_states(p)}
+
+        assert rows["alpha"]["repo"] is True
+        assert rows["alpha"]["claude"] == "synced"
+        assert rows["alpha"]["codex"] == "drift"
+        assert rows["beta"]["repo"] is False
+        assert rows["beta"]["claude"] == "absent"
+        assert rows["beta"]["codex"] == "untracked"
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

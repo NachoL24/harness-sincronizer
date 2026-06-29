@@ -62,3 +62,25 @@ def load_manifest(path: Path) -> dict:
 
 def save_manifest(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def compute_states(paths: Paths) -> list[dict]:
+    repo = scan(paths.repo_skills)
+    harness = {h: scan(paths.harness_skills[h]) for h in HARNESSES}
+    names = set(repo) | {n for hs_map in harness.values() for n in hs_map}
+    rows = []
+    for name in sorted(names):
+        r = repo.get(name)
+        row = {"name": name, "repo": r is not None}
+        for h in HARNESSES:
+            hh = harness[h].get(name)
+            if hh is None:
+                row[h] = "absent"
+            elif r is None:
+                row[h] = "untracked"
+            elif hh == r:
+                row[h] = "synced"
+            else:
+                row[h] = "drift"
+        rows.append(row)
+    return rows
