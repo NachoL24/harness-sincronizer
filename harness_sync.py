@@ -2,6 +2,7 @@
 """harness-sync: selective skill sync between Claude Code and Codex."""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -132,3 +133,68 @@ def apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
             continue
         changes += apply_skill(paths, name, targets, dry_run)
     return changes
+
+
+def cmd_status(paths: Paths) -> None:
+    rows = compute_states(paths)
+    print(f"{'SKILL':32} {'REPO':5} {'CLAUDE':10} {'CODEX':10}")
+    for r in rows:
+        print(f"{r['name']:32} {'yes' if r['repo'] else 'no':5} {r['claude']:10} {r['codex']:10}")
+
+
+def _prompt(msg: str, choices: list[str]) -> str:
+    joined = "/".join(choices)
+    while True:
+        ans = input(f"{msg} [{joined}]: ").strip().lower()
+        if ans in choices:
+            return ans
+
+
+def cmd_adopt(paths: Paths) -> None:
+    for row in compute_states(paths):
+        name = row["name"]
+        available = [h for h in HARNESSES if row[h] in ("untracked", "drift")]
+        if not available:
+            continue
+        status = ", ".join(f"{h}:{row[h]}" for h in HARNESSES)
+        print(f"\nSkill: {name}  ({status})")
+        if input("  adopt? [y/N]: ").strip().lower() != "y":
+            continue
+        source = available[0] if len(available) == 1 else _prompt("  source", available)
+        choice = _prompt("  targets", ["claude", "codex", "both", "ignore"])
+        targets = list(HARNESSES) if choice == "both" else [choice]
+        adopt_skill(paths, name, source, targets)
+        print(f"  adopted {name} from {source} -> {targets}")
+
+
+def cmd_apply(paths: Paths, dry_run: bool) -> None:
+    changes = apply_all(paths, dry_run)
+    prefix = "[dry-run] " if dry_run else ""
+    if not changes:
+        print("nothing to do")
+        return
+    for c in changes:
+        print(f"{prefix}{c}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="harness-sync")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("status", help="show skill states across harnesses")
+    sub.add_parser("adopt", help="interactively import skills into the repo")
+    ap = sub.add_parser("apply", help="push manifest skills to harnesses")
+    ap.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+
+    paths = resolve_paths(Path(__file__).resolve().parent)
+    if args.cmd == "status":
+        cmd_status(paths)
+    elif args.cmd == "adopt":
+        cmd_adopt(paths)
+    elif args.cmd == "apply":
+        cmd_apply(paths, args.dry_run)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
