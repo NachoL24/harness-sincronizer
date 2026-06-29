@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -84,3 +85,17 @@ def compute_states(paths: Paths) -> list[dict]:
                 row[h] = "drift"
         rows.append(row)
     return rows
+
+
+def copy_skill(src: Path, dst: Path) -> None:
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst)
+
+
+def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str]) -> None:
+    copy_skill(paths.harness_skills[source_harness] / name, paths.repo_skills / name)
+    man = load_manifest(paths.manifest)
+    man["skills"][name] = {"targets": list(targets)}
+    save_manifest(paths.manifest, man)

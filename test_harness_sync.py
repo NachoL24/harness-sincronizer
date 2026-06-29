@@ -95,6 +95,19 @@ def test_compute_states_covers_all_cases():
         assert rows["beta"]["codex"] == "untracked"
 
 
+def test_adopt_skill_imports_and_records():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.harness_skills["claude"], "gamma", {"SKILL.md": "body"})
+
+        hs.adopt_skill(p, "gamma", "claude", ["claude", "codex"])
+
+        assert (p.repo_skills / "gamma" / "SKILL.md").read_text() == "body"
+        man = hs.load_manifest(p.manifest)
+        assert man["skills"]["gamma"] == {"targets": ["claude", "codex"]}
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
