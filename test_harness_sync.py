@@ -368,6 +368,40 @@ def test_tui_smoke():
         asyncio.run(go())
 
 
+def test_tui_harness_add_via_real_click():
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return  # textual not installed — smoke test is a no-op
+    import asyncio
+    from textual.widgets import DataTable, Input
+    from harness_tui import HarnessSyncApp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        repo = t / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "claude": {"base": str(t / "cc")}, "codex": {"base": str(t / "cx")}}}))
+
+        async def go():
+            app = HarnessSyncApp(repo)
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                app.query_one("TabbedContent").active = "tab-harness"
+                await pilot.pause()
+                app.query_one("#harness-name", Input).value = "work"
+                app.query_one("#harness-base", Input).value = str(t / "wk")
+                # a REAL click — fails with OutOfBounds if the button is
+                # pushed off-screen (regression: Input width 100%)
+                await pilot.click("#harness-add-btn")
+                await pilot.pause()
+                table = app.query_one("#harness-table", DataTable)
+                assert table.row_count == 3, table.row_count
+
+        asyncio.run(go())
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

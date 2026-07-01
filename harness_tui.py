@@ -37,6 +37,10 @@ class HarnessSyncApp(App):
     #apply-pending { border: solid $accent; }
     Button { margin: 1 1; }
     .panel-title { padding: 0 1; text-style: bold; }
+    /* Inputs default to width 100%; inside the harness row that pushes the
+       buttons off-screen. Share the row instead. */
+    #harness-row { height: auto; }
+    #harness-name, #harness-base { width: 1fr; }
     """
 
     def __init__(self, repo_root: Path) -> None:
@@ -76,7 +80,7 @@ class HarnessSyncApp(App):
                 yield Button("Apply now", id="apply-btn", variant="warning")
             with TabPane("Harness", id="tab-harness"):
                 yield DataTable(id="harness-table", cursor_type="row")
-                with Horizontal():
+                with Horizontal(id="harness-row"):
                     yield Input(placeholder="name", id="harness-name")
                     yield Input(placeholder="base dir (e.g. ~/.claude-perso)", id="harness-base")
                     yield Button("Add", id="harness-add-btn", variant="primary")
