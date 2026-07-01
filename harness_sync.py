@@ -12,8 +12,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-HARNESSES = ("claude", "codex")
-
 
 @dataclass(frozen=True)
 class Paths:
@@ -178,10 +176,13 @@ def apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
 
 
 def cmd_status(paths: Paths) -> None:
+    names = list(paths.harness_skills)
     rows = compute_states(paths)
-    print(f"{'SKILL':32} {'REPO':5} {'CLAUDE':10} {'CODEX':10}")
+    w = {h: max(len(h), 10) for h in names}
+    print(f"{'SKILL':32} {'REPO':5} " + " ".join(f"{h:{w[h]}}" for h in names))
     for r in rows:
-        print(f"{r['name']:32} {'yes' if r['repo'] else 'no':5} {r['claude']:10} {r['codex']:10}")
+        cells = " ".join(f"{r[h]:{w[h]}}" for h in names)
+        print(f"{r['name']:32} {'yes' if r['repo'] else 'no':5} " + cells)
 
 
 def _prompt(msg: str, choices: list[str]) -> str:
@@ -192,19 +193,31 @@ def _prompt(msg: str, choices: list[str]) -> str:
             return ans
 
 
+def _prompt_targets(names: list[str]) -> list[str]:
+    while True:
+        raw = input(f"  targets (comma-separated from {names}, or 'all'/'ignore'): ").strip().lower()
+        if raw == "ignore":
+            return ["ignore"]
+        if raw == "all":
+            return list(names)
+        chosen = [x.strip() for x in raw.split(",") if x.strip()]
+        if chosen and all(c in names for c in chosen):
+            return chosen
+
+
 def cmd_adopt(paths: Paths) -> None:
+    names = list(paths.harness_skills)
     for row in compute_states(paths):
         name = row["name"]
-        available = [h for h in HARNESSES if row[h] in ("untracked", "drift")]
+        available = [h for h in names if row[h] in ("untracked", "drift")]
         if not available:
             continue
-        status = ", ".join(f"{h}:{row[h]}" for h in HARNESSES)
+        status = ", ".join(f"{h}:{row[h]}" for h in names)
         print(f"\nSkill: {name}  ({status})")
         if input("  adopt? [y/N]: ").strip().lower() != "y":
             continue
         source = available[0] if len(available) == 1 else _prompt("  source", available)
-        choice = _prompt("  targets", ["claude", "codex", "both", "ignore"])
-        targets = list(HARNESSES) if choice == "both" else [choice]
+        targets = _prompt_targets(names)
         adopt_skill(paths, name, source, targets)
         print(f"  adopted {name} from {source} -> {targets}")
 
@@ -219,6 +232,11 @@ def cmd_apply(paths: Paths, dry_run: bool) -> None:
         print(f"{prefix}{c}")
 
 
+def cmd_harness_list(paths: Paths) -> None:
+    for name, skills in paths.harness_skills.items():
+        print(f"{name:16} base={skills.parent}  skills={skills}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="harness-sync")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -226,15 +244,37 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("adopt", help="interactively import skills into the repo")
     ap = sub.add_parser("apply", help="push manifest skills to harnesses")
     ap.add_argument("--dry-run", action="store_true")
+    hp = sub.add_parser("harness", help="manage the harness registry")
+    hsub = hp.add_subparsers(dest="haction", required=True)
+    hsub.add_parser("list", help="list registered harnesses")
+    ha = hsub.add_parser("add", help="add/update a harness")
+    ha.add_argument("name")
+    ha.add_argument("base")
+    hr = hsub.add_parser("remove", help="remove a harness")
+    hr.add_argument("name")
     args = parser.parse_args(argv)
 
-    paths = resolve_paths(Path(__file__).resolve().parent)
+    try:
+        paths = resolve_paths(Path(__file__).resolve().parent)
+    except json.JSONDecodeError as e:
+        print(f"error: invalid harnesses.json: {e}", file=sys.stderr)
+        return 2
+
     if args.cmd == "status":
         cmd_status(paths)
     elif args.cmd == "adopt":
         cmd_adopt(paths)
     elif args.cmd == "apply":
         cmd_apply(paths, args.dry_run)
+    elif args.cmd == "harness":
+        if args.haction == "list":
+            cmd_harness_list(paths)
+        elif args.haction == "add":
+            harness_add(paths, args.name, args.base)
+            print(f"added harness '{args.name}' -> {args.base}")
+        elif args.haction == "remove":
+            harness_remove(paths, args.name)
+            print(f"removed harness '{args.name}'")
     return 0
 
 
