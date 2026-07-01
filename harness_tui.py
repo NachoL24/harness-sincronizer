@@ -71,9 +71,16 @@ class HarnessSyncApp(App):
                         yield SelectionList(id="plugins-targets")
                         yield Button("Adopt selected plugins", id="plugins-btn", variant="primary")
             with TabPane("Apply", id="tab-apply"):
-                yield Label("Apply view (Task 4)", classes="panel-title")
+                yield Label("Pending changes (dry-run)", classes="panel-title")
+                yield Log(id="apply-pending")
+                yield Button("Apply now", id="apply-btn", variant="warning")
             with TabPane("Harness", id="tab-harness"):
-                yield Label("Harness view (Task 4)", classes="panel-title")
+                yield DataTable(id="harness-table", cursor_type="row")
+                with Horizontal():
+                    yield Input(placeholder="name", id="harness-name")
+                    yield Input(placeholder="base dir (e.g. ~/.claude-perso)", id="harness-base")
+                    yield Button("Add", id="harness-add-btn", variant="primary")
+                    yield Button("Remove selected", id="harness-remove-btn", variant="error")
         yield Log(id="log")
         yield Footer()
 
@@ -174,10 +181,51 @@ class HarnessSyncApp(App):
         self.action_refresh()
 
     def _refresh_apply(self) -> None:
-        pass  # Task 4
+        pending = self.query_one("#apply-pending", Log)
+        pending.clear()
+        changes = hs.apply_all(self.paths, dry_run=True)
+        if not changes:
+            pending.write_line("nothing to do")
+        for c in changes:
+            pending.write_line(c)
 
     def _refresh_harness(self) -> None:
-        pass  # Task 4
+        table = self.query_one("#harness-table", DataTable)
+        table.clear(columns=True)
+        table.add_columns("NAME", "BASE", "SKILLS PATH")
+        for name, skills in self.paths.harness_skills.items():
+            table.add_row(name, str(skills.parent), str(skills))
+
+    @on(Button.Pressed, "#apply-btn")
+    def do_apply(self) -> None:
+        changes = hs.apply_all(self.paths)
+        if not changes:
+            self._log("apply: nothing to do")
+        for c in changes:
+            self._log(f"applied {c}")
+        self.action_refresh()
+
+    @on(Button.Pressed, "#harness-add-btn")
+    def add_harness(self) -> None:
+        name = self.query_one("#harness-name", Input).value.strip()
+        base = self.query_one("#harness-base", Input).value.strip()
+        if not name or not base:
+            self._log("harness add: name and base are required")
+            return
+        hs.harness_add(self.paths, name, base)
+        self._log(f"added harness '{name}' -> {base}")
+        self.action_refresh()
+
+    @on(Button.Pressed, "#harness-remove-btn")
+    def remove_harness(self) -> None:
+        table = self.query_one("#harness-table", DataTable)
+        if table.row_count == 0:
+            self._log("harness remove: no harnesses")
+            return
+        name = table.get_row_at(table.cursor_row)[0]
+        hs.harness_remove(self.paths, name)
+        self._log(f"removed harness '{name}'")
+        self.action_refresh()
 
     def _log(self, msg: str) -> None:
         self.query_one("#log", Log).write_line(msg)
