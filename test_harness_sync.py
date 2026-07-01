@@ -341,6 +341,33 @@ def test_adopt_plugin_imports_all_and_skips_collision():
         assert "dup" not in man["skills"]
 
 
+def test_tui_smoke():
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return  # textual not installed — smoke test is a no-op
+    import asyncio
+    from textual.widgets import DataTable
+    from harness_tui import HarnessSyncApp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        repo = t / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "claude": {"base": str(t / "cc")}, "codex": {"base": str(t / "cx")}}}))
+        _make_skill(t / "cc" / "skills", "alpha", {"SKILL.md": "x"})
+
+        async def go():
+            app = HarnessSyncApp(repo)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                table = app.query_one("#status-table", DataTable)
+                assert table.row_count == 1
+
+        asyncio.run(go())
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
