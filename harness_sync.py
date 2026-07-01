@@ -168,11 +168,27 @@ def copy_skill(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst)
 
 
-def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str]) -> None:
-    copy_skill(paths.harness_skills[source_harness] / name, paths.repo_skills / name)
+def import_skill(paths: Paths, name: str, src_dir: Path, targets: list[str]) -> None:
+    copy_skill(src_dir, paths.repo_skills / name)
     man = load_manifest(paths.manifest)
     man["skills"][name] = {"targets": list(targets)}
     save_manifest(paths.manifest, man)
+
+
+def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str]) -> None:
+    import_skill(paths, name, paths.harness_skills[source_harness] / name, targets)
+
+
+def adopt_plugin(paths: Paths, plugin: dict, targets: list[str]) -> tuple[list[str], list[str]]:
+    adopted: list[str] = []
+    skipped: list[str] = []
+    for name, src in plugin["skills"]:
+        if (paths.repo_skills / name).exists():
+            skipped.append(name)
+            continue
+        import_skill(paths, name, src, targets)
+        adopted.append(name)
+    return adopted, skipped
 
 
 def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = False) -> list[str]:

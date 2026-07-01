@@ -311,6 +311,36 @@ def test_harness_remove_deletes_entry():
         assert set(data["harnesses"]) == {"claude"}
 
 
+def test_import_skill_copies_and_records():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        src = t / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("x")
+        hs.import_skill(p, "foo", src, ["codex"])
+        assert (p.repo_skills / "foo" / "SKILL.md").read_text() == "x"
+        assert hs.load_manifest(p.manifest)["skills"]["foo"] == {"targets": ["codex"]}
+
+
+def test_adopt_plugin_imports_all_and_skips_collision():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "dup", {"SKILL.md": "existing"})  # collision
+        install = t / "cc" / "plugins" / "sp" / "1.0"
+        _make_plugin(t / "cc", "sp@mkt", install, ["fresh", "dup"])
+        plugin = hs.discover_plugins(p)[0]
+        adopted, skipped = hs.adopt_plugin(p, plugin, ["codex"])
+        assert adopted == ["fresh"]
+        assert skipped == ["dup"]
+        assert (p.repo_skills / "fresh" / "SKILL.md").exists()
+        assert (p.repo_skills / "dup" / "SKILL.md").read_text() == "existing"  # untouched
+        man = hs.load_manifest(p.manifest)
+        assert man["skills"]["fresh"] == {"targets": ["codex"]}
+        assert "dup" not in man["skills"]
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
