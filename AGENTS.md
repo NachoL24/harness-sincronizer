@@ -10,6 +10,10 @@ directory holds the canonical copy of each skill; `manifest.json` records, per
 skill, which harnesses it should be pushed to. You decide what to sync — nothing
 is synced blindly.
 
+**`skills/`, `manifest.json` and `harnesses.json` are per-user runtime data and
+are gitignored** — they live in your local checkout, not in this public tool
+repo. Each user builds their own canonical store via `adopt`.
+
 ## Architecture
 
 - **Pure, path-injected functions** do the work (hashing, scanning, manifest

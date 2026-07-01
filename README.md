@@ -17,9 +17,13 @@ blindly — you decide, skill by skill.
 
 | Location | Path | Role |
 |----------|------|------|
-| Repo | `./skills/` + `./manifest.json` | **source of truth** |
+| Repo | `./skills/` + `./manifest.json` | **source of truth** (local, gitignored) |
 | Claude Code | `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills`) | sync target |
 | Codex | `~/.codex/skills/` (or `$CODEX_HOME/skills`) | sync target |
+
+> `skills/`, `manifest.json` and `harnesses.json` are **per-user runtime data**
+> and are gitignored — you build your own canonical store locally via `adopt`.
+> They are not shared through this repo.
 
 A skill is a directory (e.g. `branch-pr/`) containing `SKILL.md` plus any
 support files. The tool compares a content hash of each skill across the three
