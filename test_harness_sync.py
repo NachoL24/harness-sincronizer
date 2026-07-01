@@ -239,6 +239,31 @@ def test_apply_all_warns_and_skips_unknown_target():
         assert "ghost" in err.getvalue()                     # unknown target warned
 
 
+def test_harness_add_seeds_defaults_when_absent():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        p.registry.parent.mkdir(parents=True, exist_ok=True)
+        assert not p.registry.exists()
+        hs.harness_add(p, "claude-perso", "~/.claude-perso")
+        data = hs.load_registry(p.registry)
+        assert set(data["harnesses"]) == {"claude", "codex", "claude-perso"}
+        assert data["harnesses"]["claude-perso"] == {"base": "~/.claude-perso"}
+
+
+def test_harness_remove_deletes_entry():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        p.registry.parent.mkdir(parents=True, exist_ok=True)
+        hs.save_registry(p.registry, {"harnesses": {
+            "claude": {"base": "~/.claude"}, "codex": {"base": "~/.codex"},
+        }})
+        hs.harness_remove(p, "codex")
+        data = hs.load_registry(p.registry)
+        assert set(data["harnesses"]) == {"claude"}
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

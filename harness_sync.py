@@ -80,6 +80,31 @@ def save_manifest(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def load_registry(path: Path) -> dict:
+    if not path.exists():
+        return {"harnesses": {}}
+    return json.loads(path.read_text())
+
+
+def save_registry(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def harness_add(paths: Paths, name: str, base: str) -> None:
+    if not paths.registry.exists():
+        data = {"harnesses": {n: {"base": str(b)} for n, b in default_harnesses().items()}}
+    else:
+        data = load_registry(paths.registry)
+    data["harnesses"][name] = {"base": base}
+    save_registry(paths.registry, data)
+
+
+def harness_remove(paths: Paths, name: str) -> None:
+    data = load_registry(paths.registry)
+    data["harnesses"].pop(name, None)
+    save_registry(paths.registry, data)
+
+
 def compute_states(paths: Paths) -> list[dict]:
     repo = scan(paths.repo_skills)
     names = list(paths.harness_skills)
