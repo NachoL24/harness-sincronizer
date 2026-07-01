@@ -11,7 +11,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     Button, DataTable, Footer, Header, Input, Label, Log, Select,
-    SelectionList, TabbedContent, TabPane,
+    SelectionList, Static, TabbedContent, TabPane,
 )
 from textual.widgets.selection_list import Selection
 
@@ -30,17 +30,31 @@ class HarnessSyncApp(App):
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
         Binding("q", "quit", "Quit"),
+        Binding("1", "tab('tab-status')", "Status", show=False),
+        Binding("2", "tab('tab-adopt')", "Adopt", show=False),
+        Binding("3", "tab('tab-plugins')", "Plugins", show=False),
+        Binding("4", "tab('tab-apply')", "Apply", show=False),
+        Binding("5", "tab('tab-harness')", "Harness", show=False),
     ]
+    # Height discipline is the load-bearing part of this stylesheet: every
+    # scrollable gets 1fr, never auto, so no pane can outgrow the screen and
+    # scroll the tab bar out of view.
     CSS = """
-    SelectionList { border: solid $accent; }
-    #log { height: 8; border: solid $accent; }
-    #apply-pending { border: solid $accent; }
-    Button { margin: 1 1; }
-    .panel-title { padding: 0 1; text-style: bold; }
-    /* Inputs default to width 100%; inside the harness row that pushes the
-       buttons off-screen. Share the row instead. */
-    #harness-row { height: auto; }
+    TabbedContent { height: 1fr; }
+    TabPane { padding: 1 2; }
+    DataTable { height: 1fr; }
+    #status-summary { height: 1; margin-bottom: 1; }
+    .picker { height: 1fr; }
+    .picker SelectionList { height: 1fr; border: round $primary; }
+    .side { width: 44; padding-left: 2; }
+    .side SelectionList { height: 1fr; }
+    .side Button { width: 100%; margin-top: 1; }
+    .panel-title { text-style: bold; color: $text-muted; }
+    #apply-pending { height: 1fr; border: round $primary; }
+    #apply-btn { width: 24; margin-top: 1; }
+    #harness-row { height: auto; margin-top: 1; }
     #harness-name, #harness-base { width: 1fr; }
+    #log { height: 6; border: round $primary; margin: 0 1; }
     """
 
     def __init__(self, repo_root: Path) -> None:
@@ -52,13 +66,14 @@ class HarnessSyncApp(App):
         yield Header()
         with TabbedContent():
             with TabPane("Status", id="tab-status"):
+                yield Static(id="status-summary")
                 yield DataTable(id="status-table", cursor_type="row")
             with TabPane("Adopt", id="tab-adopt"):
-                with Horizontal():
+                with Horizontal(classes="picker"):
                     with Vertical():
                         yield Label("Skills (untracked/drift)", classes="panel-title")
                         yield SelectionList(id="adopt-skills")
-                    with Vertical():
+                    with Vertical(classes="side"):
                         yield Label("Targets", classes="panel-title")
                         yield SelectionList(id="adopt-targets")
                         yield Label("Source (when ambiguous)", classes="panel-title")
@@ -66,16 +81,15 @@ class HarnessSyncApp(App):
                                      value="auto", id="adopt-source")
                         yield Button("Adopt selected", id="adopt-btn", variant="primary")
             with TabPane("Plugins", id="tab-plugins"):
-                with Horizontal():
+                with Horizontal(classes="picker"):
                     with Vertical():
                         yield Label("Plugins", classes="panel-title")
                         yield SelectionList(id="plugins-list")
-                    with Vertical():
+                    with Vertical(classes="side"):
                         yield Label("Targets", classes="panel-title")
                         yield SelectionList(id="plugins-targets")
                         yield Button("Adopt selected plugins", id="plugins-btn", variant="primary")
             with TabPane("Apply", id="tab-apply"):
-                yield Label("Pending changes (dry-run)", classes="panel-title")
                 yield Log(id="apply-pending")
                 yield Button("Apply now", id="apply-btn", variant="warning")
             with TabPane("Harness", id="tab-harness"):
@@ -89,7 +103,13 @@ class HarnessSyncApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.theme = "nord"
+        self.query_one("#log", Log).border_title = "Activity"
+        self.query_one("#apply-pending", Log).border_title = "Pending changes (dry-run)"
         self.action_refresh()
+
+    def action_tab(self, tab: str) -> None:
+        self.query_one(TabbedContent).active = tab
 
     def action_refresh(self) -> None:
         self.paths = hs.resolve_paths(self.repo_root)
@@ -104,12 +124,28 @@ class HarnessSyncApp(App):
         table.clear(columns=True)
         names = list(self.paths.harness_skills)
         table.add_columns("SKILL", "REPO", *[n.upper() for n in names])
-        for row in hs.compute_states(self.paths):
+        rows = hs.compute_states(self.paths)
+        counts = {"synced": 0, "drift": 0, "untracked": 0}
+        for row in rows:
+            states = {row[h] for h in names}
+            if "drift" in states:
+                counts["drift"] += 1
+            elif "untracked" in states:
+                counts["untracked"] += 1
+            elif "synced" in states:
+                counts["synced"] += 1
             cells = [row["name"], "yes" if row["repo"] else "no"]
             for h in names:
                 state = row[h]
                 cells.append(Text(state, style=STATE_STYLE.get(state, "")))
             table.add_row(*cells)
+        summary = Text(f"{len(rows)} skills · ")
+        summary.append(f"{counts['synced']} synced", style=STATE_STYLE["synced"])
+        summary.append(" · ")
+        summary.append(f"{counts['drift']} drift", style=STATE_STYLE["drift"])
+        summary.append(" · ")
+        summary.append(f"{counts['untracked']} untracked", style=STATE_STYLE["untracked"])
+        self.query_one("#status-summary", Static).update(summary)
 
     def _refresh_adopt(self) -> None:
         names = list(self.paths.harness_skills)
