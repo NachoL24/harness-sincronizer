@@ -50,9 +50,26 @@ class HarnessSyncApp(App):
             with TabPane("Status", id="tab-status"):
                 yield DataTable(id="status-table", cursor_type="row")
             with TabPane("Adopt", id="tab-adopt"):
-                yield Label("Adopt view (Task 3)", classes="panel-title")
+                with Horizontal():
+                    with Vertical():
+                        yield Label("Skills (untracked/drift)", classes="panel-title")
+                        yield SelectionList(id="adopt-skills")
+                    with Vertical():
+                        yield Label("Targets", classes="panel-title")
+                        yield SelectionList(id="adopt-targets")
+                        yield Label("Source (when ambiguous)", classes="panel-title")
+                        yield Select([("auto (first available)", "auto")],
+                                     value="auto", id="adopt-source")
+                        yield Button("Adopt selected", id="adopt-btn", variant="primary")
             with TabPane("Plugins", id="tab-plugins"):
-                yield Label("Plugins view (Task 3)", classes="panel-title")
+                with Horizontal():
+                    with Vertical():
+                        yield Label("Plugins", classes="panel-title")
+                        yield SelectionList(id="plugins-list")
+                    with Vertical():
+                        yield Label("Targets", classes="panel-title")
+                        yield SelectionList(id="plugins-targets")
+                        yield Button("Adopt selected plugins", id="plugins-btn", variant="primary")
             with TabPane("Apply", id="tab-apply"):
                 yield Label("Apply view (Task 4)", classes="panel-title")
             with TabPane("Harness", id="tab-harness"):
@@ -84,10 +101,77 @@ class HarnessSyncApp(App):
             table.add_row(*cells)
 
     def _refresh_adopt(self) -> None:
-        pass  # Task 3
+        names = list(self.paths.harness_skills)
+        skills = self.query_one("#adopt-skills", SelectionList)
+        skills.clear_options()
+        self._adoptable: dict[str, list[str]] = {}
+        for row in hs.compute_states(self.paths):
+            available = [h for h in names if row[h] in ("untracked", "drift")]
+            if not available:
+                continue
+            self._adoptable[row["name"]] = available
+            detail = ", ".join(f"{h}:{row[h]}" for h in available)
+            skills.add_option(Selection(f"{row['name']}  ({detail})", row["name"]))
+        self._fill_targets("#adopt-targets", names)
+        source = self.query_one("#adopt-source", Select)
+        source.set_options([("auto (first available)", "auto")] + [(h, h) for h in names])
+        source.value = "auto"
 
     def _refresh_plugins(self) -> None:
-        pass  # Task 3
+        plist = self.query_one("#plugins-list", SelectionList)
+        plist.clear_options()
+        self._plugins = hs.discover_plugins(self.paths)
+        repo = set(hs.scan(self.paths.repo_skills))
+        for i, p in enumerate(self._plugins):
+            skill_names = [n for n, _ in p["skills"]]
+            in_repo = sum(1 for n in skill_names if n in repo)
+            label = f"{p['plugin']}  ({p['harness']}, {len(skill_names)} skills, {in_repo} in repo)"
+            plist.add_option(Selection(label, i))
+        self._fill_targets("#plugins-targets", list(self.paths.harness_skills))
+
+    def _fill_targets(self, selector: str, names: list[str]) -> None:
+        targets = self.query_one(selector, SelectionList)
+        targets.clear_options()
+        for h in names:
+            targets.add_option(Selection(h, h))
+        targets.add_option(Selection("ignore", "ignore"))
+
+    @staticmethod
+    def _batch_targets(selected: list[str]) -> list[str]:
+        return ["ignore"] if "ignore" in selected else list(selected)
+
+    @on(Button.Pressed, "#adopt-btn")
+    def adopt_selected(self) -> None:
+        chosen = self.query_one("#adopt-skills", SelectionList).selected
+        raw_targets = self.query_one("#adopt-targets", SelectionList).selected
+        if not chosen or not raw_targets:
+            self._log("adopt: select at least one skill and one target")
+            return
+        targets = self._batch_targets(raw_targets)
+        source_pref = self.query_one("#adopt-source", Select).value
+        for name in chosen:
+            available = self._adoptable[name]
+            source = source_pref if source_pref in available else available[0]
+            hs.adopt_skill(self.paths, name, source, targets)
+            self._log(f"adopted {name} from {source} -> {targets}")
+        self.action_refresh()
+
+    @on(Button.Pressed, "#plugins-btn")
+    def adopt_selected_plugins(self) -> None:
+        chosen = self.query_one("#plugins-list", SelectionList).selected
+        raw_targets = self.query_one("#plugins-targets", SelectionList).selected
+        if not chosen or not raw_targets:
+            self._log("plugins: select at least one plugin and one target")
+            return
+        targets = self._batch_targets(raw_targets)
+        for i in chosen:
+            plugin = self._plugins[i]
+            adopted, skipped = hs.adopt_plugin(self.paths, plugin, targets)
+            msg = f"{plugin['plugin']}: adopted {len(adopted)} -> {targets}"
+            if skipped:
+                msg += f"; skipped (already in repo): {skipped}"
+            self._log(msg)
+        self.action_refresh()
 
     def _refresh_apply(self) -> None:
         pass  # Task 4
