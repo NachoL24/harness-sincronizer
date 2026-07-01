@@ -68,6 +68,41 @@ def scan(skills_dir: Path) -> dict[str, str]:
     return {d.name: skill_hash(d) for d in sorted(skills_dir.iterdir()) if d.is_dir()}
 
 
+def read_installed_plugins(plugins_dir: Path) -> list[tuple[str, Path]]:
+    f = plugins_dir / "installed_plugins.json"
+    if not f.exists():
+        return []
+    try:
+        data = json.loads(f.read_text())
+    except json.JSONDecodeError:
+        return []
+    result: list[tuple[str, Path]] = []
+    for key, entries in data.get("plugins", {}).items():
+        for entry in entries:
+            install_path = entry.get("installPath")
+            if install_path:
+                result.append((key, Path(install_path)))
+    return result
+
+
+def discover_plugins(paths: Paths) -> list[dict]:
+    plugins: list[dict] = []
+    for harness, skills_dir in paths.harness_skills.items():
+        plugins_dir = skills_dir.parent / "plugins"
+        for plugin_key, install_path in read_installed_plugins(plugins_dir):
+            sdir = install_path / "skills"
+            if not sdir.is_dir():
+                continue
+            skills = [
+                (d.name, d)
+                for d in sorted(sdir.iterdir())
+                if d.is_dir() and (d / "SKILL.md").exists()
+            ]
+            if skills:
+                plugins.append({"plugin": plugin_key, "harness": harness, "skills": skills})
+    return plugins
+
+
 def load_manifest(path: Path) -> dict:
     if not path.exists():
         return {"skills": {}}
@@ -133,11 +168,27 @@ def copy_skill(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst)
 
 
-def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str]) -> None:
-    copy_skill(paths.harness_skills[source_harness] / name, paths.repo_skills / name)
+def import_skill(paths: Paths, name: str, src_dir: Path, targets: list[str]) -> None:
+    copy_skill(src_dir, paths.repo_skills / name)
     man = load_manifest(paths.manifest)
     man["skills"][name] = {"targets": list(targets)}
     save_manifest(paths.manifest, man)
+
+
+def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str]) -> None:
+    import_skill(paths, name, paths.harness_skills[source_harness] / name, targets)
+
+
+def adopt_plugin(paths: Paths, plugin: dict, targets: list[str]) -> tuple[list[str], list[str]]:
+    adopted: list[str] = []
+    skipped: list[str] = []
+    for name, src in plugin["skills"]:
+        if (paths.repo_skills / name).exists():
+            skipped.append(name)
+            continue
+        import_skill(paths, name, src, targets)
+        adopted.append(name)
+    return adopted, skipped
 
 
 def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = False) -> list[str]:
@@ -237,6 +288,34 @@ def cmd_harness_list(paths: Paths) -> None:
         print(f"{name:16} base={skills.parent}  skills={skills}")
 
 
+def cmd_plugins_list(paths: Paths) -> None:
+    plugins = discover_plugins(paths)
+    if not plugins:
+        print("no plugins found")
+        return
+    repo = set(scan(paths.repo_skills))
+    print(f"{'PLUGIN':40} {'HARNESS':14} {'SKILLS':7} {'IN-REPO':7}")
+    for p in plugins:
+        names = [n for n, _ in p["skills"]]
+        in_repo = sum(1 for n in names if n in repo)
+        print(f"{p['plugin']:40} {p['harness']:14} {len(names):<7} {in_repo:<7}")
+
+
+def cmd_plugins_adopt(paths: Paths) -> None:
+    registered = list(paths.harness_skills)
+    for p in discover_plugins(paths):
+        skills = [n for n, _ in p["skills"]]
+        print(f"\nPlugin: {p['plugin']}  ({len(skills)} skills, from {p['harness']})")
+        if input("  adopt whole plugin? [y/N]: ").strip().lower() != "y":
+            continue
+        targets = _prompt_targets(registered)
+        adopted, skipped = adopt_plugin(paths, p, targets)
+        msg = f"  adopted {len(adopted)} skills -> {targets}"
+        if skipped:
+            msg += f"; skipped (name already in repo): {skipped}"
+        print(msg)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="harness-sync")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -252,6 +331,10 @@ def main(argv: list[str] | None = None) -> int:
     ha.add_argument("base")
     hr = hsub.add_parser("remove", help="remove a harness")
     hr.add_argument("name")
+    pp = sub.add_parser("plugins", help="discover and adopt plugin-bundled skills")
+    psub = pp.add_subparsers(dest="paction", required=True)
+    psub.add_parser("list", help="list discovered plugin skills")
+    psub.add_parser("adopt", help="interactively adopt whole plugins into the repo")
     args = parser.parse_args(argv)
 
     try:
@@ -275,6 +358,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.haction == "remove":
             harness_remove(paths, args.name)
             print(f"removed harness '{args.name}'")
+    elif args.cmd == "plugins":
+        if args.paction == "list":
+            cmd_plugins_list(paths)
+        elif args.paction == "adopt":
+            cmd_plugins_adopt(paths)
     return 0
 
 

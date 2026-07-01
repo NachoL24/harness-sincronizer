@@ -157,6 +157,53 @@ def test_apply_all_skips_ignored_and_leaves_untracked():
         assert (p.harness_skills["claude"] / "foreign" / "SKILL.md").read_text() == "f"
 
 
+def _make_plugin(harness_base: Path, plugin_key: str, install_path: Path, skill_names: list[str]) -> None:
+    for s in skill_names:
+        d = install_path / "skills" / s
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(f"# {s}")
+    pj = harness_base / "plugins" / "installed_plugins.json"
+    pj.parent.mkdir(parents=True, exist_ok=True)
+    data = {"version": 2, "plugins": {}}
+    if pj.exists():
+        data = json.loads(pj.read_text())
+    data["plugins"].setdefault(plugin_key, []).append(
+        {"installPath": str(install_path), "version": "1.0.0"}
+    )
+    pj.write_text(json.dumps(data))
+
+
+def test_read_installed_plugins_tolerant():
+    with tempfile.TemporaryDirectory() as t:
+        assert hs.read_installed_plugins(Path(t) / "nope") == []
+        pdir = Path(t) / "plugins"
+        pdir.mkdir()
+        (pdir / "installed_plugins.json").write_text("{bad")
+        assert hs.read_installed_plugins(pdir) == []
+
+
+def test_read_installed_plugins_parses_active():
+    with tempfile.TemporaryDirectory() as t:
+        pdir = Path(t) / "plugins"
+        pdir.mkdir()
+        (pdir / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+            "sp@mkt": [{"installPath": "/x/sp/1.0", "version": "1.0"}]}}))
+        assert hs.read_installed_plugins(pdir) == [("sp@mkt", Path("/x/sp/1.0"))]
+
+
+def test_discover_plugins_finds_skills_tagged():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)  # claude base = t/cc, codex base = t/cx
+        install = t / "cc" / "plugins" / "cache" / "sp" / "1.0"
+        _make_plugin(t / "cc", "sp@mkt", install, ["brainstorming", "tdd"])
+        plugins = hs.discover_plugins(p)
+        assert len(plugins) == 1
+        assert plugins[0]["plugin"] == "sp@mkt"
+        assert plugins[0]["harness"] == "claude"
+        assert sorted(n for n, _ in plugins[0]["skills"]) == ["brainstorming", "tdd"]
+
+
 def test_load_harnesses_absent_uses_env_defaults():
     with tempfile.TemporaryDirectory() as t:
         os.environ["CLAUDE_CONFIG_DIR"] = str(Path(t) / "cc")
@@ -262,6 +309,36 @@ def test_harness_remove_deletes_entry():
         hs.harness_remove(p, "codex")
         data = hs.load_registry(p.registry)
         assert set(data["harnesses"]) == {"claude"}
+
+
+def test_import_skill_copies_and_records():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        src = t / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("x")
+        hs.import_skill(p, "foo", src, ["codex"])
+        assert (p.repo_skills / "foo" / "SKILL.md").read_text() == "x"
+        assert hs.load_manifest(p.manifest)["skills"]["foo"] == {"targets": ["codex"]}
+
+
+def test_adopt_plugin_imports_all_and_skips_collision():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "dup", {"SKILL.md": "existing"})  # collision
+        install = t / "cc" / "plugins" / "sp" / "1.0"
+        _make_plugin(t / "cc", "sp@mkt", install, ["fresh", "dup"])
+        plugin = hs.discover_plugins(p)[0]
+        adopted, skipped = hs.adopt_plugin(p, plugin, ["codex"])
+        assert adopted == ["fresh"]
+        assert skipped == ["dup"]
+        assert (p.repo_skills / "fresh" / "SKILL.md").exists()
+        assert (p.repo_skills / "dup" / "SKILL.md").read_text() == "existing"  # untouched
+        man = hs.load_manifest(p.manifest)
+        assert man["skills"]["fresh"] == {"targets": ["codex"]}
+        assert "dup" not in man["skills"]
 
 
 if __name__ == "__main__":

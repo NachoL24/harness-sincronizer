@@ -55,8 +55,8 @@ For each `untracked` or `drift` skill, it asks:
 - **adopt?** `y`/`N`
 - **source** — which harness to import the content from (only asked when the
   skill exists in more than one)
-- **targets** — where it should be pushed: `claude` / `codex` / `both` /
-  `ignore`
+- **targets** — where it should be pushed: a comma-separated list of registered
+  harness names, or `all`, or `ignore`
 
 Your answers are written to `manifest.json` and the chosen content is copied
 into `skills/`. `ignore` means "tracked but never pushed".
@@ -89,13 +89,35 @@ python3 harness_sync.py apply             # actually sync
 - before overwriting an existing skill, it backs it up to
   `.harness-sync-backups/<timestamp>/<harness>/<name>/`.
 
+## Plugin skills
+
+Most skills don't live in `<base>/skills/` — they're bundled inside **Claude
+plugins**. `harness-sync` discovers them per harness via
+`<base>/plugins/installed_plugins.json` (only the active install, so no cache
+junk or stale versions) and can adopt them into the repo so they sync to Codex
+as standalone skills.
+
+```bash
+python3 harness_sync.py plugins list    # discover plugins + their skill counts
+python3 harness_sync.py plugins adopt   # interactive, one prompt per plugin
+python3 harness_sync.py apply           # push the adopted skills to their targets
+```
+
+- The **unit of adoption is the whole plugin** — `adopt` asks once per plugin
+  and imports all of its skills, not one prompt per skill.
+- A plugin skill whose name already exists in the repo is **skipped with a
+  warning** (never overwritten); its siblings still adopt.
+- Adopted skills become normal `manifest.json` entries, so `apply` handles them
+  like any other skill.
+
 ## Quick test drive
 
 ```bash
 git clone <this-repo>
 cd harness-sincronizer
-python3 test_harness_sync.py          # run the suite (should print PASS x11)
+python3 test_harness_sync.py          # run the suite (all tests should PASS)
 python3 harness_sync.py status        # inspect your real harness skills
+python3 harness_sync.py plugins list  # see skills bundled inside Claude plugins
 python3 harness_sync.py adopt         # pick a couple of skills to track
 python3 harness_sync.py apply --dry-run
 python3 harness_sync.py apply

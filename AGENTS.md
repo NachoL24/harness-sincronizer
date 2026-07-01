@@ -36,6 +36,10 @@ repo. Each user builds their own canonical store via `adopt`.
   skills to their target harnesses. Idempotent.
 - `python3 harness_sync.py harness list|add <name> <base>|remove <name>` —
   manage the harness registry (`harnesses.json`).
+- `python3 harness_sync.py plugins list|adopt` — discover skills bundled inside
+  Claude plugins (per harness, via `installed_plugins.json`) and adopt them
+  whole-plugin at a time into the repo. Repo-name collisions are skipped with a
+  warning. `adopt_plugin()` is the non-interactive core.
 
 ## Harnesses (the registry)
 
