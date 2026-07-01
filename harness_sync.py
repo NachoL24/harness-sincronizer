@@ -335,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     psub = pp.add_subparsers(dest="paction", required=True)
     psub.add_parser("list", help="list discovered plugin skills")
     psub.add_parser("adopt", help="interactively adopt whole plugins into the repo")
+    sub.add_parser("tui", help="launch the full-screen dashboard (requires textual)")
     args = parser.parse_args(argv)
 
     try:
@@ -363,6 +364,13 @@ def main(argv: list[str] | None = None) -> int:
             cmd_plugins_list(paths)
         elif args.paction == "adopt":
             cmd_plugins_adopt(paths)
+    elif args.cmd == "tui":
+        try:
+            from harness_tui import run as tui_run
+        except ImportError:
+            print("error: the TUI requires textual — pip install textual", file=sys.stderr)
+            return 2
+        tui_run(Path(__file__).resolve().parent)
     return 0
 
 
