@@ -17,9 +17,13 @@ blindly — you decide, skill by skill.
 
 | Location | Path | Role |
 |----------|------|------|
-| Repo | `./skills/` + `./manifest.json` | **source of truth** |
+| Repo | `./skills/` + `./manifest.json` | **source of truth** (local, gitignored) |
 | Claude Code | `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills`) | sync target |
 | Codex | `~/.codex/skills/` (or `$CODEX_HOME/skills`) | sync target |
+
+> `skills/`, `manifest.json` and `harnesses.json` are **per-user runtime data**
+> and are gitignored — you build your own canonical store locally via `adopt`.
+> They are not shared through this repo.
 
 A skill is a directory (e.g. `branch-pr/`) containing `SKILL.md` plus any
 support files. The tool compares a content hash of each skill across the three
@@ -97,12 +101,48 @@ python3 harness_sync.py apply --dry-run
 python3 harness_sync.py apply
 ```
 
-### Two Claude accounts
+## Harnesses (the registry)
 
-Point `CLAUDE_CONFIG_DIR` at a second config dir and everything works unchanged:
+The set of harnesses the tool syncs is configurable via `harnesses.json` at the
+repo root. Each entry maps a name to a **base config dir**; the skills path is
+derived as `<base>/skills`.
+
+```json
+{
+  "harnesses": {
+    "claude":       { "base": "~/.claude" },
+    "claude-perso": { "base": "~/.claude-perso" },
+    "codex":        { "base": "~/.codex" }
+  }
+}
+```
+
+- **No `harnesses.json`** → built-in defaults: `claude` → `$CLAUDE_CONFIG_DIR`
+  or `~/.claude`, `codex` → `$CODEX_HOME` or `~/.codex`. (Backwards compatible —
+  the env-var override still works in this mode.)
+- **`harnesses.json` present** → it fully defines the harness set and **env vars
+  are ignored** (explicit wins). Order in the file = column order in `status`.
+
+Manage it with:
 
 ```bash
-CLAUDE_CONFIG_DIR=~/.claude-work python3 harness_sync.py status
+python3 harness_sync.py harness list                       # show resolved registry
+python3 harness_sync.py harness add claude-perso ~/.claude-perso
+python3 harness_sync.py harness remove codex
+```
+
+The first `harness add` (when no file exists) seeds the registry with the
+current defaults plus your new entry, so nothing is lost. `manifest.json`
+`targets` reference these names; a target naming an unknown harness is warned
+and skipped.
+
+### Two Claude accounts
+
+Register the second account once, and it becomes a permanent column:
+
+```bash
+python3 harness_sync.py harness add claude-perso ~/.claude-perso
+python3 harness_sync.py status   # claude, claude-perso and codex as columns
 ```
 
 ## Development

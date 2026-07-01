@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 .harness-sync-backups/
 .atl/
+
+# Per-user runtime data — the canonical skill store and sync decisions are
+# local to each user, not shared through this public tool repo.
+/skills/
+/manifest.json
+/harnesses.json

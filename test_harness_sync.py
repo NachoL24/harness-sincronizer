@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -72,6 +75,7 @@ def _paths_in(t: Path) -> "hs.Paths":
         repo_skills=t / "repo" / "skills",
         manifest=t / "repo" / "manifest.json",
         backups=t / "repo" / ".backups",
+        registry=t / "repo" / "harnesses.json",
         harness_skills={"claude": t / "cc" / "skills", "codex": t / "cx" / "skills"},
     )
 
@@ -151,6 +155,113 @@ def test_apply_all_skips_ignored_and_leaves_untracked():
         assert (p.harness_skills["claude"] / "keep").exists()
         assert not (p.harness_skills["claude"] / "skip").exists()
         assert (p.harness_skills["claude"] / "foreign" / "SKILL.md").read_text() == "f"
+
+
+def test_load_harnesses_absent_uses_env_defaults():
+    with tempfile.TemporaryDirectory() as t:
+        os.environ["CLAUDE_CONFIG_DIR"] = str(Path(t) / "cc")
+        os.environ["CODEX_HOME"] = str(Path(t) / "cx")
+        try:
+            h = hs.load_harnesses(Path(t) / "repo")
+            assert h == {"claude": Path(t) / "cc", "codex": Path(t) / "cx"}
+        finally:
+            del os.environ["CLAUDE_CONFIG_DIR"]
+            del os.environ["CODEX_HOME"]
+
+
+def test_load_harnesses_present_parses_and_expands():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        repo.mkdir()
+        (repo / "harnesses.json").write_text(
+            '{"harnesses": {"work": {"base": "~/wk"}, "codex": {"base": "/abs/cx"}}}'
+        )
+        h = hs.load_harnesses(repo)
+        assert h["work"] == Path.home() / "wk"
+        assert h["codex"] == Path("/abs/cx")
+        assert list(h) == ["work", "codex"]  # insertion order preserved
+
+
+def test_load_harnesses_invalid_json_raises():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        repo.mkdir()
+        (repo / "harnesses.json").write_text("{not valid")
+        raised = False
+        try:
+            hs.load_harnesses(repo)
+        except json.JSONDecodeError:
+            raised = True
+        assert raised
+
+
+def _paths_in_3(t: Path) -> "hs.Paths":
+    return hs.Paths(
+        repo_skills=t / "repo" / "skills",
+        manifest=t / "repo" / "manifest.json",
+        backups=t / "repo" / ".backups",
+        registry=t / "repo" / "harnesses.json",
+        harness_skills={
+            "claude": t / "cc" / "skills",
+            "claude-perso": t / "cp" / "skills",
+            "codex": t / "cx" / "skills",
+        },
+    )
+
+
+def test_compute_states_three_harnesses():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in_3(t)
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "v1"})
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "v1"})       # synced
+        _make_skill(p.harness_skills["claude-perso"], "alpha", {"SKILL.md": "OLD"})  # drift
+        # codex: absent for alpha
+        rows = {r["name"]: r for r in hs.compute_states(p)}
+        assert rows["alpha"]["claude"] == "synced"
+        assert rows["alpha"]["claude-perso"] == "drift"
+        assert rows["alpha"]["codex"] == "absent"
+
+
+def test_apply_all_warns_and_skips_unknown_target():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in_3(t)
+        _make_skill(p.repo_skills, "beta", {"SKILL.md": "b"})
+        hs.save_manifest(p.manifest, {"skills": {
+            "beta": {"targets": ["claude-perso", "ghost"]},
+        }})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = hs.apply_all(p)
+        assert changes == ["beta -> claude-perso"]           # known target applied
+        assert (p.harness_skills["claude-perso"] / "beta").exists()
+        assert "ghost" in err.getvalue()                     # unknown target warned
+
+
+def test_harness_add_seeds_defaults_when_absent():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        p.registry.parent.mkdir(parents=True, exist_ok=True)
+        assert not p.registry.exists()
+        hs.harness_add(p, "claude-perso", "~/.claude-perso")
+        data = hs.load_registry(p.registry)
+        assert set(data["harnesses"]) == {"claude", "codex", "claude-perso"}
+        assert data["harnesses"]["claude-perso"] == {"base": "~/.claude-perso"}
+
+
+def test_harness_remove_deletes_entry():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        p.registry.parent.mkdir(parents=True, exist_ok=True)
+        hs.save_registry(p.registry, {"harnesses": {
+            "claude": {"base": "~/.claude"}, "codex": {"base": "~/.codex"},
+        }})
+        hs.harness_remove(p, "codex")
+        data = hs.load_registry(p.registry)
+        assert set(data["harnesses"]) == {"claude"}
 
 
 if __name__ == "__main__":
