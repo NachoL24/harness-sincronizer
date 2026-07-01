@@ -223,6 +223,22 @@ def test_compute_states_three_harnesses():
         assert rows["alpha"]["codex"] == "absent"
 
 
+def test_apply_all_warns_and_skips_unknown_target():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in_3(t)
+        _make_skill(p.repo_skills, "beta", {"SKILL.md": "b"})
+        hs.save_manifest(p.manifest, {"skills": {
+            "beta": {"targets": ["claude-perso", "ghost"]},
+        }})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = hs.apply_all(p)
+        assert changes == ["beta -> claude-perso"]           # known target applied
+        assert (p.harness_skills["claude-perso"] / "beta").exists()
+        assert "ghost" in err.getvalue()                     # unknown target warned
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

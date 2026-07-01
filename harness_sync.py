@@ -121,8 +121,8 @@ def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = Fal
     src = paths.repo_skills / name
     src_hash = skill_hash(src)
     changes: list[str] = []
-    for h in HARNESSES:
-        if h not in targets:
+    for h in targets:
+        if h not in paths.harness_skills:
             continue
         dst = paths.harness_skills[h] / name
         if dst.is_dir() and skill_hash(dst) == src_hash:
@@ -145,6 +145,9 @@ def apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
         targets = cfg.get("targets", [])
         if "ignore" in targets:
             continue
+        for t in targets:
+            if t not in paths.harness_skills:
+                print(f"warning: skill '{name}' targets unknown harness '{t}' — skipping", file=sys.stderr)
         changes += apply_skill(paths, name, targets, dry_run)
     return changes
 
