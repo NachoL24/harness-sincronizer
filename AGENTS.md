@@ -40,6 +40,9 @@ repo. Each user builds their own canonical store via `adopt`.
   Claude plugins (per harness, via `installed_plugins.json`) and adopt them
   whole-plugin at a time into the repo. Repo-name collisions are skipped with a
   warning. `adopt_plugin()` is the non-interactive core.
+- `python3 harness_sync.py tui` — full-screen dashboard (Status / Adopt /
+  Plugins / Apply / Harness). Requires `textual`; presentation-only layer in
+  `harness_tui.py`, lazy-imported with an install hint when missing.
 
 ## Harnesses (the registry)
 
@@ -69,7 +72,11 @@ Follow TDD: write the failing test first, then the minimal implementation.
 
 ## Conventions
 
-- Python 3.11+, **standard library only**. Do not add dependencies.
+- Python 3.11+. The **core is stdlib-only** (`harness_sync.py`,
+  `test_harness_sync.py` must run without any third-party package). The one
+  allowed dependency is `textual` (declared in `requirements.txt`), and ONLY
+  inside the presentation layer `harness_tui.py` — never import it from the
+  core.
 - All code, comments, and commit messages in English.
 - Keep `harness_sync.py` as one focused module unless it genuinely grows too
   large.

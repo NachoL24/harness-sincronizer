@@ -110,6 +110,26 @@ python3 harness_sync.py apply           # push the adopted skills to their targe
 - Adopted skills become normal `manifest.json` entries, so `apply` handles them
   like any other skill.
 
+## TUI
+
+A full-screen dashboard over the same commands, built with
+[textual](https://textual.textualize.io/) (the only dependency, and only for
+the UI — the core is still stdlib):
+
+```bash
+pip install textual
+python3 harness_sync.py tui
+```
+
+Five tabs: **Status** (color-coded state table), **Adopt** (checkbox
+multi-select of untracked/drift skills), **Plugins** (adopt whole plugins),
+**Apply** (review pending changes, then apply), **Harness** (manage the
+registry). Selection is batch-style: tick several items, choose the targets
+once, confirm. `r` refreshes, `q` quits.
+
+Without `textual` installed, `tui` prints an install hint and exits; every
+other command keeps working — the plain CLI remains the scriptable path.
+
 ## Quick test drive
 
 ```bash
