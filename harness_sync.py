@@ -68,6 +68,41 @@ def scan(skills_dir: Path) -> dict[str, str]:
     return {d.name: skill_hash(d) for d in sorted(skills_dir.iterdir()) if d.is_dir()}
 
 
+def read_installed_plugins(plugins_dir: Path) -> list[tuple[str, Path]]:
+    f = plugins_dir / "installed_plugins.json"
+    if not f.exists():
+        return []
+    try:
+        data = json.loads(f.read_text())
+    except json.JSONDecodeError:
+        return []
+    result: list[tuple[str, Path]] = []
+    for key, entries in data.get("plugins", {}).items():
+        for entry in entries:
+            install_path = entry.get("installPath")
+            if install_path:
+                result.append((key, Path(install_path)))
+    return result
+
+
+def discover_plugins(paths: Paths) -> list[dict]:
+    plugins: list[dict] = []
+    for harness, skills_dir in paths.harness_skills.items():
+        plugins_dir = skills_dir.parent / "plugins"
+        for plugin_key, install_path in read_installed_plugins(plugins_dir):
+            sdir = install_path / "skills"
+            if not sdir.is_dir():
+                continue
+            skills = [
+                (d.name, d)
+                for d in sorted(sdir.iterdir())
+                if d.is_dir() and (d / "SKILL.md").exists()
+            ]
+            if skills:
+                plugins.append({"plugin": plugin_key, "harness": harness, "skills": skills})
+    return plugins
+
+
 def load_manifest(path: Path) -> dict:
     if not path.exists():
         return {"skills": {}}
