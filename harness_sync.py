@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,25 +20,37 @@ class Paths:
     repo_skills: Path
     manifest: Path
     backups: Path
+    registry: Path
     harness_skills: dict[str, Path]
 
 
-def harness_skill_dir(harness: str) -> Path:
-    if harness == "claude":
-        base = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
-        return base / "skills"
-    if harness == "codex":
-        base = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-        return base / "skills"
-    raise ValueError(f"unknown harness: {harness}")
+def default_harnesses() -> dict[str, Path]:
+    return {
+        "claude": Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")),
+        "codex": Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+    }
+
+
+def registry_path(repo_root: Path) -> Path:
+    return repo_root / "harnesses.json"
+
+
+def load_harnesses(repo_root: Path) -> dict[str, Path]:
+    path = registry_path(repo_root)
+    if not path.exists():
+        return default_harnesses()
+    data = json.loads(path.read_text())
+    return {name: Path(cfg["base"]).expanduser() for name, cfg in data["harnesses"].items()}
 
 
 def resolve_paths(repo_root: Path) -> Paths:
+    bases = load_harnesses(repo_root)
     return Paths(
         repo_skills=repo_root / "skills",
         manifest=repo_root / "manifest.json",
         backups=repo_root / ".harness-sync-backups",
-        harness_skills={h: harness_skill_dir(h) for h in HARNESSES},
+        registry=registry_path(repo_root),
+        harness_skills={name: base / "skills" for name, base in bases.items()},
     )
 
 

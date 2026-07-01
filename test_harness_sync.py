@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -72,6 +75,7 @@ def _paths_in(t: Path) -> "hs.Paths":
         repo_skills=t / "repo" / "skills",
         manifest=t / "repo" / "manifest.json",
         backups=t / "repo" / ".backups",
+        registry=t / "repo" / "harnesses.json",
         harness_skills={"claude": t / "cc" / "skills", "codex": t / "cx" / "skills"},
     )
 
@@ -151,6 +155,44 @@ def test_apply_all_skips_ignored_and_leaves_untracked():
         assert (p.harness_skills["claude"] / "keep").exists()
         assert not (p.harness_skills["claude"] / "skip").exists()
         assert (p.harness_skills["claude"] / "foreign" / "SKILL.md").read_text() == "f"
+
+
+def test_load_harnesses_absent_uses_env_defaults():
+    with tempfile.TemporaryDirectory() as t:
+        os.environ["CLAUDE_CONFIG_DIR"] = str(Path(t) / "cc")
+        os.environ["CODEX_HOME"] = str(Path(t) / "cx")
+        try:
+            h = hs.load_harnesses(Path(t) / "repo")
+            assert h == {"claude": Path(t) / "cc", "codex": Path(t) / "cx"}
+        finally:
+            del os.environ["CLAUDE_CONFIG_DIR"]
+            del os.environ["CODEX_HOME"]
+
+
+def test_load_harnesses_present_parses_and_expands():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        repo.mkdir()
+        (repo / "harnesses.json").write_text(
+            '{"harnesses": {"work": {"base": "~/wk"}, "codex": {"base": "/abs/cx"}}}'
+        )
+        h = hs.load_harnesses(repo)
+        assert h["work"] == Path.home() / "wk"
+        assert h["codex"] == Path("/abs/cx")
+        assert list(h) == ["work", "codex"]  # insertion order preserved
+
+
+def test_load_harnesses_invalid_json_raises():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        repo.mkdir()
+        (repo / "harnesses.json").write_text("{not valid")
+        raised = False
+        try:
+            hs.load_harnesses(repo)
+        except json.JSONDecodeError:
+            raised = True
+        assert raised
 
 
 if __name__ == "__main__":
