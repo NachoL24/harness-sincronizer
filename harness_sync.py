@@ -82,13 +82,14 @@ def save_manifest(path: Path, data: dict) -> None:
 
 def compute_states(paths: Paths) -> list[dict]:
     repo = scan(paths.repo_skills)
-    harness = {h: scan(paths.harness_skills[h]) for h in HARNESSES}
-    names = set(repo) | {n for hs_map in harness.values() for n in hs_map}
+    names = list(paths.harness_skills)
+    harness = {h: scan(paths.harness_skills[h]) for h in names}
+    all_names = set(repo) | {n for m in harness.values() for n in m}
     rows = []
-    for name in sorted(names):
+    for name in sorted(all_names):
         r = repo.get(name)
         row = {"name": name, "repo": r is not None}
-        for h in HARNESSES:
+        for h in names:
             hh = harness[h].get(name)
             if hh is None:
                 row[h] = "absent"

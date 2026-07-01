@@ -195,6 +195,34 @@ def test_load_harnesses_invalid_json_raises():
         assert raised
 
 
+def _paths_in_3(t: Path) -> "hs.Paths":
+    return hs.Paths(
+        repo_skills=t / "repo" / "skills",
+        manifest=t / "repo" / "manifest.json",
+        backups=t / "repo" / ".backups",
+        registry=t / "repo" / "harnesses.json",
+        harness_skills={
+            "claude": t / "cc" / "skills",
+            "claude-perso": t / "cp" / "skills",
+            "codex": t / "cx" / "skills",
+        },
+    )
+
+
+def test_compute_states_three_harnesses():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in_3(t)
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "v1"})
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "v1"})       # synced
+        _make_skill(p.harness_skills["claude-perso"], "alpha", {"SKILL.md": "OLD"})  # drift
+        # codex: absent for alpha
+        rows = {r["name"]: r for r in hs.compute_states(p)}
+        assert rows["alpha"]["claude"] == "synced"
+        assert rows["alpha"]["claude-perso"] == "drift"
+        assert rows["alpha"]["codex"] == "absent"
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
