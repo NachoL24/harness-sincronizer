@@ -288,6 +288,34 @@ def cmd_harness_list(paths: Paths) -> None:
         print(f"{name:16} base={skills.parent}  skills={skills}")
 
 
+def cmd_plugins_list(paths: Paths) -> None:
+    plugins = discover_plugins(paths)
+    if not plugins:
+        print("no plugins found")
+        return
+    repo = set(scan(paths.repo_skills))
+    print(f"{'PLUGIN':40} {'HARNESS':14} {'SKILLS':7} {'IN-REPO':7}")
+    for p in plugins:
+        names = [n for n, _ in p["skills"]]
+        in_repo = sum(1 for n in names if n in repo)
+        print(f"{p['plugin']:40} {p['harness']:14} {len(names):<7} {in_repo:<7}")
+
+
+def cmd_plugins_adopt(paths: Paths) -> None:
+    registered = list(paths.harness_skills)
+    for p in discover_plugins(paths):
+        skills = [n for n, _ in p["skills"]]
+        print(f"\nPlugin: {p['plugin']}  ({len(skills)} skills, from {p['harness']})")
+        if input("  adopt whole plugin? [y/N]: ").strip().lower() != "y":
+            continue
+        targets = _prompt_targets(registered)
+        adopted, skipped = adopt_plugin(paths, p, targets)
+        msg = f"  adopted {len(adopted)} skills -> {targets}"
+        if skipped:
+            msg += f"; skipped (name already in repo): {skipped}"
+        print(msg)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="harness-sync")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -303,6 +331,10 @@ def main(argv: list[str] | None = None) -> int:
     ha.add_argument("base")
     hr = hsub.add_parser("remove", help="remove a harness")
     hr.add_argument("name")
+    pp = sub.add_parser("plugins", help="discover and adopt plugin-bundled skills")
+    psub = pp.add_subparsers(dest="paction", required=True)
+    psub.add_parser("list", help="list discovered plugin skills")
+    psub.add_parser("adopt", help="interactively adopt whole plugins into the repo")
     args = parser.parse_args(argv)
 
     try:
@@ -326,6 +358,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.haction == "remove":
             harness_remove(paths, args.name)
             print(f"removed harness '{args.name}'")
+    elif args.cmd == "plugins":
+        if args.paction == "list":
+            cmd_plugins_list(paths)
+        elif args.paction == "adopt":
+            cmd_plugins_adopt(paths)
     return 0
 
 
