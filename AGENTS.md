@@ -30,14 +30,23 @@ is synced blindly.
   `adopt_skill()`.
 - `python3 harness_sync.py apply [--dry-run]` — declarative; pushes manifest
   skills to their target harnesses. Idempotent.
+- `python3 harness_sync.py harness list|add <name> <base>|remove <name>` —
+  manage the harness registry (`harnesses.json`).
 
-## Harness paths (env overrides)
+## Harnesses (the registry)
 
-- Claude skills: `$CLAUDE_CONFIG_DIR/skills` (default `~/.claude/skills`)
-- Codex skills: `$CODEX_HOME/skills` (default `~/.codex/skills`)
+The harness set is configurable via `harnesses.json` (repo root), mapping each
+name to a **base config dir**; the skills path is derived as `<base>/skills`.
 
-`CLAUDE_CONFIG_DIR` is the hook for the future "two Claude accounts" use case —
-point it at a second config dir and sync works unchanged.
+- **Registry absent** → built-in defaults: `claude` → `$CLAUDE_CONFIG_DIR` or
+  `~/.claude`, `codex` → `$CODEX_HOME` or `~/.codex`. Env-var override applies.
+- **Registry present** → it is authoritative and env vars are ignored.
+- `harness add` with no file seeds the current defaults plus the new entry.
+- Manifest `targets` reference registry names; unknown targets are warned and
+  skipped by `apply`.
+
+This is how the "N Claude accounts + Codex" use case works: register each
+account once and it becomes a permanent column.
 
 ## Testing
 
