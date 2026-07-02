@@ -20,6 +20,7 @@ class Paths:
     backups: Path
     registry: Path
     harness_skills: dict[str, Path]
+    harness_types: dict[str, str]
 
 
 def default_harnesses() -> dict[str, Path]:
@@ -41,6 +42,19 @@ def load_harnesses(repo_root: Path) -> dict[str, Path]:
     return {name: Path(cfg["base"]).expanduser() for name, cfg in data["harnesses"].items()}
 
 
+def infer_type(name: str) -> str:
+    return "codex" if name == "codex" else "claude"
+
+
+def load_harness_types(repo_root: Path) -> dict[str, str]:
+    path = registry_path(repo_root)
+    if not path.exists():
+        return {name: infer_type(name) for name in default_harnesses()}
+    data = json.loads(path.read_text())
+    return {name: cfg.get("type", infer_type(name))
+            for name, cfg in data["harnesses"].items()}
+
+
 def resolve_paths(repo_root: Path) -> Paths:
     bases = load_harnesses(repo_root)
     return Paths(
@@ -49,6 +63,7 @@ def resolve_paths(repo_root: Path) -> Paths:
         backups=repo_root / ".harness-sync-backups",
         registry=registry_path(repo_root),
         harness_skills={name: base / "skills" for name, base in bases.items()},
+        harness_types=load_harness_types(repo_root),
     )
 
 
@@ -128,12 +143,15 @@ def save_registry(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def harness_add(paths: Paths, name: str, base: str) -> None:
+def harness_add(paths: Paths, name: str, base: str, type: str | None = None) -> None:
     if not paths.registry.exists():
         data = {"harnesses": {n: {"base": str(b)} for n, b in default_harnesses().items()}}
     else:
         data = load_registry(paths.registry)
-    data["harnesses"][name] = {"base": base}
+    entry: dict = {"base": base}
+    if type:
+        entry["type"] = type
+    data["harnesses"][name] = entry
     save_registry(paths.registry, data)
 
 
@@ -375,6 +393,8 @@ def main(argv: list[str] | None = None) -> int:
     ha = hsub.add_parser("add", help="add/update a harness")
     ha.add_argument("name")
     ha.add_argument("base")
+    ha.add_argument("type", nargs="?", default=None,
+                    help="harness type: claude or codex (default: inferred)")
     hr = hsub.add_parser("remove", help="remove a harness")
     hr.add_argument("name")
     pp = sub.add_parser("plugins", help="discover and adopt plugin-bundled skills")
@@ -402,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.haction == "list":
             cmd_harness_list(paths)
         elif args.haction == "add":
-            harness_add(paths, args.name, args.base)
+            harness_add(paths, args.name, args.base, args.type)
             print(f"added harness '{args.name}' -> {args.base}")
         elif args.haction == "remove":
             harness_remove(paths, args.name)

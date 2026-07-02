@@ -77,6 +77,7 @@ def _paths_in(t: Path) -> "hs.Paths":
         backups=t / "repo" / ".backups",
         registry=t / "repo" / "harnesses.json",
         harness_skills={"claude": t / "cc" / "skills", "codex": t / "cx" / "skills"},
+        harness_types={"claude": "claude", "codex": "codex"},
     )
 
 
@@ -253,6 +254,7 @@ def _paths_in_3(t: Path) -> "hs.Paths":
             "claude-perso": t / "cp" / "skills",
             "codex": t / "cx" / "skills",
         },
+        harness_types={"claude": "claude", "claude-perso": "claude", "codex": "codex"},
     )
 
 
@@ -538,6 +540,43 @@ def test_discover_plugins_nested_layout_with_dedupe():
         names = [n for n, _ in plugins[0]["skills"]]
         assert names == ["dup", "lazy"]                                  # nested-only found
         assert dict(plugins[0]["skills"])["dup"] == canonical_dup        # canonical wins
+
+
+def test_harness_types_inferred_and_explicit():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        repo.mkdir()
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "claude": {"base": "~/.claude"},
+            "codex": {"base": "~/.codex"},
+            "work": {"base": "~/wk"},
+            "cx2": {"base": "~/cx2", "type": "codex"},
+        }}))
+        types = hs.load_harness_types(repo)
+        assert types == {"claude": "claude", "codex": "codex",
+                         "work": "claude", "cx2": "codex"}
+
+
+def test_resolve_paths_carries_types():
+    with tempfile.TemporaryDirectory() as t:
+        os.environ["CLAUDE_CONFIG_DIR"] = str(Path(t) / "cc")
+        os.environ["CODEX_HOME"] = str(Path(t) / "cx")
+        try:
+            paths = hs.resolve_paths(Path(t) / "repo")
+            assert paths.harness_types == {"claude": "claude", "codex": "codex"}
+        finally:
+            del os.environ["CLAUDE_CONFIG_DIR"]
+            del os.environ["CODEX_HOME"]
+
+
+def test_harness_add_with_type():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        p.registry.parent.mkdir(parents=True, exist_ok=True)
+        hs.harness_add(p, "cx2", "~/cx2", "codex")
+        data = hs.load_registry(p.registry)
+        assert data["harnesses"]["cx2"] == {"base": "~/cx2", "type": "codex"}
 
 
 if __name__ == "__main__":
