@@ -47,9 +47,12 @@ repo. Each user builds their own canonical store via `adopt`.
   Claude plugins (per harness, via `installed_plugins.json`) and adopt them
   whole-plugin at a time into the repo. Repo-name collisions are skipped with a
   warning. `adopt_plugin()` is the non-interactive core.
-- `python3 harness_sync.py tui` — full-screen dashboard (Status / Adopt /
-  Plugins / Apply / Harness). Requires `textual`; presentation-only layer in
-  `harness_tui.py`, lazy-imported with an install hint when missing.
+- `python3 harness_sync.py` (no subcommand) or `... tui` — full-screen
+  dashboard, the **default command** (Status / Adopt / Plugins / MCP / Apply /
+  Harness). Requires `textual`; presentation-only layer in `harness_tui.py`,
+  lazy-imported with an install hint when missing. The MCP tab needs Python
+  3.11+ (shows a hint otherwise); the Apply tab includes skills, optional
+  prune, and `mcp:` pending lines.
 - `python3.12 harness_sync.py mcp list|adopt|apply [--dry-run]` — sync global
   MCP server definitions (Claude `.claude.json` JSON ↔ Codex `config.toml`
   TOML). Needs Python 3.11+ (`tomllib`, lazily gated — the rest of the CLI

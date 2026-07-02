@@ -163,15 +163,17 @@ the UI — the core is still stdlib):
 
 ```bash
 pip install textual
-python3 harness_sync.py tui
+python3 harness_sync.py          # the TUI is the default command
+python3 harness_sync.py tui      # explicit form
 ```
 
-Five tabs: **Status** (color-coded state table; `u` untracks the skill under
+Six tabs: **Status** (color-coded state table; `u` untracks the skill under
 the cursor), **Adopt** (checkbox multi-select of untracked/drift skills),
-**Plugins** (adopt whole plugins), **Apply** (review pending changes, optional
-prune checkbox, then apply), **Harness** (manage the registry). Selection is
-batch-style: tick several items, choose the targets once, confirm. `r`
-refreshes, `q` quits.
+**Plugins** (adopt whole plugins), **MCP** (adopt MCP servers; needs Python
+3.11+, otherwise the tab shows a hint), **Apply** (review ALL pending changes —
+skills, optional prune, and `mcp:` lines — then apply), **Harness** (manage the
+registry). Selection is batch-style: tick several items, choose the targets
+once, confirm. `r` refreshes, `q` quits, `1-6` switch tabs.
 
 Without `textual` installed, `tui` prints an install hint and exits; every
 other command keeps working — the plain CLI remains the scriptable path.

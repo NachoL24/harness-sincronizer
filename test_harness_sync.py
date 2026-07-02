@@ -720,6 +720,69 @@ def test_mcp_apply_dry_run_and_unknown_target():
         assert "OLD" in (t / "cx" / "config.toml").read_text()     # dry-run wrote nothing
 
 
+def test_default_command_is_tui():
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return
+    import harness_tui
+    called = []
+    orig = harness_tui.run
+    harness_tui.run = lambda root: called.append(root)
+    try:
+        rc = hs.main([])
+        assert rc == 0
+        assert called, "main([]) should launch the TUI by default"
+    finally:
+        harness_tui.run = orig
+
+
+def test_tui_mcp_tab_adopt():
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return
+    if not _tomllib_available():
+        return
+    import asyncio
+    from textual.widgets import DataTable, SelectionList
+    from harness_tui import HarnessSyncApp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        repo = t / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "claude": {"base": str(t / "cc")}, "codex": {"base": str(t / "cx")}}}))
+        (t / "cc").mkdir(parents=True, exist_ok=True)
+        (t / "cc" / ".claude.json").write_text(json.dumps({"mcpServers": {
+            "alpha": {"command": "a"}}}))
+        (t / "cx").mkdir(parents=True, exist_ok=True)
+        (t / "cx" / "config.toml").write_text('model = "gpt"\n')
+
+        async def go():
+            app = HarnessSyncApp(repo)
+            async with app.run_test(size=(130, 42)) as pilot:
+                await pilot.pause()
+                table = app.query_one("#mcp-table", DataTable)
+                assert table.row_count == 1
+                servers = app.query_one("#mcp-servers", SelectionList)
+                assert servers.option_count == 1
+                servers.select(servers.get_option_at_index(0))
+                targets = app.query_one("#mcp-targets", SelectionList)
+                for i in range(targets.option_count):
+                    opt = targets.get_option_at_index(i)
+                    if opt.value == "codex":
+                        targets.select(opt)
+                app.adopt_selected_mcp()
+                await pilot.pause()
+                man = hs.load_manifest(repo / "manifest.json")
+                assert man["mcp"]["alpha"]["targets"] == ["codex"]
+                assert man["mcp"]["alpha"]["config"] == {"command": "a"}
+
+        asyncio.run(go())
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

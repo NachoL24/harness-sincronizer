@@ -573,7 +573,7 @@ def cmd_mcp_apply(paths: Paths, dry_run: bool) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="harness-sync")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(dest="cmd")  # optional: no subcommand -> tui
     sub.add_parser("status", help="show skill states across harnesses")
     sub.add_parser("adopt", help="interactively import skills into the repo")
     ap = sub.add_parser("apply", help="push manifest skills to harnesses")
@@ -604,6 +604,8 @@ def main(argv: list[str] | None = None) -> int:
     map_ = msub.add_parser("apply", help="push manifest MCP servers to harnesses")
     map_.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    if args.cmd is None:
+        args.cmd = "tui"
 
     try:
         paths = resolve_paths(Path(__file__).resolve().parent)
