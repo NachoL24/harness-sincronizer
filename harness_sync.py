@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -656,15 +657,153 @@ def plugin_sync_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
                 settings.setdefault("extraKnownMarketplaces", {})[mname] = \
                     {"source": cfg["marketplace"]}
             pending[t] = settings
+    _flush_settings(paths, pending, "_plugins")
+    return changes
+
+
+def _flush_settings(paths: Paths, pending: dict[str, dict], label: str) -> None:
     for h, settings in pending.items():
         path = _harness_base(paths, h) / "settings.json"
         if path.exists():
             backup = (paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S")
-                      / h / "_plugins" / path.name)
+                      / h / label / path.name)
             backup.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, backup)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+SETTINGS_EXCLUDED = {"enabledPlugins", "extraKnownMarketplaces"}
+BASE_TOKEN = "${HARNESS_BASE}"
+_REF_RE = re.compile(r"\$\{HARNESS_BASE\}/((?:[\w@%+=:,.^-]+/)*[\w@%+=:,.^-]+)")
+
+
+def _walk_strings(value, fn):
+    if isinstance(value, str):
+        return fn(value)
+    if isinstance(value, list):
+        return [_walk_strings(v, fn) for v in value]
+    if isinstance(value, dict):
+        return {k: _walk_strings(v, fn) for k, v in value.items()}
+    return value
+
+
+def canonicalize_value(value, base: Path):
+    subs = [str(base)]
+    home = str(Path.home())
+    if str(base).startswith(home + os.sep):
+        subs.append("~" + str(base)[len(home):])
+    # path boundary: don't rewrite e.g. ~/.claude-other when base is ~/.claude
+    pattern = re.compile(
+        "(?:" + "|".join(re.escape(t) for t in subs) + r")(?![\w.-])")
+
+    return _walk_strings(value, lambda s: pattern.sub(BASE_TOKEN, s))
+
+
+def resolve_value(value, base: Path):
+    return _walk_strings(value, lambda s: s.replace(BASE_TOKEN, str(base)))
+
+
+def referenced_paths(value) -> set[str]:
+    found: set[str] = set()
+    _walk_strings(value, lambda s: (found.update(_REF_RE.findall(s)), s)[1])
+    return found
+
+
+def _settings_files_dir(paths: Paths) -> Path:
+    return paths.repo_skills.parent / "settings-files"
+
+
+def settings_states(paths: Paths) -> list[dict]:
+    man = load_manifest(paths.manifest).get("settings", {})
+    names = _claude_harnesses(paths)
+    raw = {h: read_settings(_harness_base(paths, h) / "settings.json")
+           for h in names}
+    keys = (set(man) | {k for d in raw.values() for k in d}) - SETTINGS_EXCLUDED
+    rows = []
+    for key in sorted(keys):
+        tracked = man.get(key)
+        row = {"name": key, "repo": tracked is not None}
+        for h in names:
+            if key not in raw[h]:
+                row[h] = "absent"
+            elif tracked is None:
+                row[h] = "untracked"
+            else:
+                base = _harness_base(paths, h)
+                same = canonicalize_value(raw[h][key], base) == tracked["value"]
+                if same:
+                    for rel in referenced_paths(tracked["value"]):
+                        repo_f = _settings_files_dir(paths) / rel
+                        tgt = base / rel
+                        if repo_f.is_file() and (not tgt.is_file()
+                                                 or skill_hash(tgt) != skill_hash(repo_f)):
+                            same = False
+                            break
+                row[h] = "synced" if same else "drift"
+        rows.append(row)
+    return rows
+
+
+def settings_adopt(paths: Paths, key: str, source_harness: str,
+                   targets: list[str]) -> None:
+    base = _harness_base(paths, source_harness)
+    value = canonicalize_value(
+        read_settings(base / "settings.json")[key], base)
+    for rel in sorted(referenced_paths(value)):
+        src = base / rel
+        if src.is_file():
+            dst = _settings_files_dir(paths) / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        else:
+            print(f"warning: settings '{key}' references '{rel}' but "
+                  f"{src} does not exist — string synced, file skipped",
+                  file=sys.stderr)
+    man = load_manifest(paths.manifest)
+    man.setdefault("settings", {})[key] = {"targets": list(targets), "value": value}
+    save_manifest(paths.manifest, man)
+
+
+def settings_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
+    man = load_manifest(paths.manifest).get("settings", {})
+    changes: list[str] = []
+    pending: dict[str, dict] = {}
+    for key, cfg in sorted(man.items()):
+        targets = cfg.get("targets", [])
+        if "ignore" in targets:
+            continue
+        for t in targets:
+            if t not in paths.harness_skills or paths.harness_types[t] != "claude":
+                print(f"warning: settings key '{key}' targets non-claude or "
+                      f"unknown harness '{t}' — skipping", file=sys.stderr)
+                continue
+            base = _harness_base(paths, t)
+            settings = pending.get(t)
+            if settings is None:
+                settings = read_settings(base / "settings.json")
+            desired = resolve_value(cfg["value"], base)
+            file_jobs = []
+            for rel in sorted(referenced_paths(cfg["value"])):
+                repo_f = _settings_files_dir(paths) / rel
+                tgt = base / rel
+                if repo_f.is_file() and (not tgt.is_file()
+                                         or skill_hash(tgt) != skill_hash(repo_f)):
+                    file_jobs.append((repo_f, tgt, rel))
+            if settings.get(key) == desired and not file_jobs:
+                continue
+            changes.append(f"settings:{key} -> {t}")
+            if dry_run:
+                continue
+            for repo_f, tgt, rel in file_jobs:
+                if tgt.exists():
+                    backup_skill(paths, f"{t}/_settings", rel, tgt)
+                tgt.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(repo_f, tgt)
+            if settings.get(key) != desired:
+                settings[key] = desired
+                pending[t] = settings
+    _flush_settings(paths, pending, "_settings")
     return changes
 
 
@@ -813,6 +952,46 @@ def cmd_plugin_sync_apply(paths: Paths, dry_run: bool) -> None:
         print(f"{prefix}{c}")
 
 
+def cmd_settings_list(paths: Paths) -> None:
+    names = _claude_harnesses(paths)
+    rows = settings_states(paths)
+    if not rows:
+        print("no settings keys found")
+        return
+    w = {h: max(len(h), 10) for h in names}
+    print(f"{'KEY':28} {'REPO':5} " + " ".join(f"{h:{w[h]}}" for h in names))
+    for r in rows:
+        cells = " ".join(f"{r[h]:{w[h]}}" for h in names)
+        print(f"{r['name']:28} {'yes' if r['repo'] else 'no':5} " + cells)
+
+
+def cmd_settings_adopt(paths: Paths) -> None:
+    names = _claude_harnesses(paths)
+    for row in settings_states(paths):
+        key = row["name"]
+        available = [h for h in names if row[h] in ("untracked", "drift")]
+        if not available:
+            continue
+        status = ", ".join(f"{h}:{row[h]}" for h in names)
+        print(f"\nSettings key: {key}  ({status})")
+        if input("  adopt? [y/N]: ").strip().lower() != "y":
+            continue
+        source = available[0] if len(available) == 1 else _prompt("  source", available)
+        targets = _prompt_targets(names)
+        settings_adopt(paths, key, source, targets)
+        print(f"  adopted {key} from {source} -> {targets}")
+
+
+def cmd_settings_apply(paths: Paths, dry_run: bool) -> None:
+    changes = settings_apply_all(paths, dry_run)
+    prefix = "[dry-run] " if dry_run else ""
+    if not changes:
+        print("nothing to do")
+        return
+    for c in changes:
+        print(f"{prefix}{c}")
+
+
 def cmd_mcp_list(paths: Paths) -> None:
     names = list(paths.harness_skills)
     rows = mcp_states(paths)
@@ -887,6 +1066,12 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("name")
     rp.add_argument("source", nargs="?", default=None,
                     help="source harness (default: the only drifted one)")
+    sp = sub.add_parser("settings", help="sync settings.json keys between Claude accounts")
+    ssub = sp.add_subparsers(dest="saction", required=True)
+    ssub.add_parser("list", help="show settings-key states across Claude accounts")
+    ssub.add_parser("adopt", help="interactively track settings keys in the manifest")
+    sap = ssub.add_parser("apply", help="push tracked settings keys to Claude accounts")
+    sap.add_argument("--dry-run", action="store_true")
     mp = sub.add_parser("mcp", help="sync MCP server definitions between harnesses")
     msub = mp.add_subparsers(dest="maction", required=True)
     msub.add_parser("list", help="show MCP server states across harnesses")
@@ -929,6 +1114,13 @@ def main(argv: list[str] | None = None) -> int:
             cmd_plugin_sync_adopt(paths)
         elif args.paction == "sync-apply":
             cmd_plugin_sync_apply(paths, args.dry_run)
+    elif args.cmd == "settings":
+        if args.saction == "list":
+            cmd_settings_list(paths)
+        elif args.saction == "adopt":
+            cmd_settings_adopt(paths)
+        elif args.saction == "apply":
+            cmd_settings_apply(paths, args.dry_run)
     elif args.cmd == "tui":
         try:
             from harness_tui import run as tui_run

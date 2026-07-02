@@ -225,6 +225,33 @@ python3 harness_sync.py plugins sync-apply
 - No version pinning: presence + enablement sync; the auto-updater owns
   versions.
 
+## Settings & hooks (Claude ↔ Claude)
+
+Hooks, permissions, env, statusLine — they're all just top-level keys of
+`settings.json`. The sync unit is **one settings key**: you pick which keys to
+track at adopt time, so work-only secrets (e.g. `env` tokens) never leak into
+accounts you didn't target.
+
+```bash
+python3 harness_sync.py settings list    # key × Claude-account state table
+python3 harness_sync.py settings adopt   # pick keys + source + target accounts
+python3 harness_sync.py settings apply --dry-run
+python3 harness_sync.py settings apply
+```
+
+- **Account-neutral paths**: at adopt, strings containing the source account's
+  base dir become `${HARNESS_BASE}`; at apply each target gets its own
+  absolute base. Fixes the classic "personal account's statusLine points at
+  the work account's script" drift.
+- **Referenced files ride along**: a `${HARNESS_BASE}/rel/path` that exists as
+  a file at adopt is copied into the repo (`settings-files/`, gitignored) and
+  materialized on each target (hash-checked, backup before overwrite).
+- **Whole-key replace, surgical write**: only the tracked key changes; every
+  other settings.json key round-trips untouched; settings.json is backed up
+  first. No deep merge — conflict resolution is out of scope (#5).
+- `enabledPlugins` / `extraKnownMarketplaces` are excluded here — they belong
+  to whole-plugin sync. Claude-type harnesses only.
+
 ## TUI
 
 A full-screen dashboard over the same commands, built with
