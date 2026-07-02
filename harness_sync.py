@@ -214,6 +214,27 @@ def save_manifest(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def state_path(paths: Paths) -> Path:
+    return paths.manifest.parent / ".sync-state.json"
+
+
+def load_state(paths: Paths) -> dict:
+    p = state_path(paths)
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text())
+
+
+def save_state(paths: Paths, state: dict) -> None:
+    state_path(paths).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def record_synced(paths: Paths, kind: str, name: str, harness: str, hash_: str) -> None:
+    state = load_state(paths)
+    state.setdefault(kind, {}).setdefault(name, {})[harness] = hash_
+    save_state(paths, state)
+
+
 def load_registry(path: Path) -> dict:
     if not path.exists():
         return {"harnesses": {}}
@@ -363,6 +384,10 @@ def copy_skill(src: Path, dst: Path) -> None:
 
 def backup_skill(paths: Paths, label: str, name: str, src: Path) -> None:
     backup = paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S") / label / name
+    n = 1
+    while backup.exists():  # same asset backed up twice within one second
+        backup = backup.with_name(f"{name}-{n}")
+        n += 1
     backup.parent.mkdir(parents=True, exist_ok=True)
     if src.is_file():
         shutil.copy2(src, backup)
@@ -382,6 +407,8 @@ def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str]
                 kind: str = "skills") -> None:
     src = harness_asset_path(paths, source_harness, kind, name)
     import_skill(paths, name, src, targets, kind)
+    record_synced(paths, kind, name, source_harness,
+                  skill_hash(repo_kind_dir(paths, kind) / name))
 
 
 def adopt_plugin(paths: Paths, plugin: dict, targets: list[str]) -> tuple[list[str], list[str]]:
@@ -404,6 +431,7 @@ def refresh_skill(paths: Paths, name: str, source_harness: str, kind: str = "ski
     if repo_asset.exists():
         backup_skill(paths, "repo", name, repo_asset)
     copy_skill(harness_asset_path(paths, source_harness, kind, name), repo_asset)
+    record_synced(paths, kind, name, source_harness, skill_hash(repo_asset))
 
 
 def _remove_asset(path: Path) -> None:
@@ -439,6 +467,7 @@ def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = Fal
                   file=sys.stderr)
             continue
         if dst.exists() and skill_hash(dst) == src_hash:
+            record_synced(paths, kind, name, h, src_hash)
             continue
         changes.append(f"{format_asset_name(kind, name)} -> {h}")
         if dry_run:
@@ -446,6 +475,7 @@ def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = Fal
         if dst.exists():
             backup_skill(paths, h, name, dst)
         copy_skill(src, dst)
+        record_synced(paths, kind, name, h, src_hash)
     return changes
 
 
@@ -485,6 +515,85 @@ def prune_all(paths: Paths, dry_run: bool = False) -> list[str]:
                 backup_skill(paths, h, name, dst)
                 _remove_asset(dst)
     return changes
+
+
+def two_way_sync(paths: Paths, dry_run: bool = False) -> dict:
+    man = load_manifest(paths.manifest)
+    state = load_state(paths)
+    result = {"push": [], "pull": [], "conflict": [], "warn": []}
+    for kind in KINDS:
+        for name, cfg in sorted(man.get(kind, {}).items()):
+            if "ignore" in cfg.get("targets", []):
+                continue
+            targets = [t for t in cfg.get("targets", []) if t in paths.harness_skills]
+            label = format_asset_name(kind, name)
+            repo_asset = repo_kind_dir(paths, kind) / name
+            if not repo_asset.exists():
+                result["warn"].append(f"{label}: repo copy missing — untrack or re-adopt")
+                continue
+            repo_hash = skill_hash(repo_asset)
+            entry = state.setdefault(kind, {}).setdefault(name, {})
+            harness_hash = {}
+            for h in targets:
+                dst = harness_asset_path(paths, h, kind, name)
+                if dst is None:  # codex-type target of a claude-only kind
+                    harness_hash[h] = None
+                    continue
+                harness_hash[h] = skill_hash(dst) if dst.exists() else None
+
+            # phase 1: pull harness-only changes (repo unchanged since last sync)
+            for h in targets:
+                h_hash = harness_hash[h]
+                if h_hash is None or h_hash == repo_hash:
+                    continue
+                if repo_hash == entry.get(h):
+                    result["pull"].append(f"pull {label} <- {h}")
+                    if not dry_run:
+                        refresh_skill(paths, name, h, kind)
+                    repo_hash = h_hash
+                    entry[h] = h_hash
+
+            # phase 2: push, record, or report
+            for h in targets:
+                dst = harness_asset_path(paths, h, kind, name)
+                if dst is None:
+                    continue
+                h_hash = harness_hash[h]
+                last = entry.get(h)
+                if h_hash == repo_hash:
+                    entry[h] = repo_hash
+                    continue
+                if h_hash is None and last is not None:
+                    result["warn"].append(
+                        f"{label}: deleted in '{h}' — untrack it, or run "
+                        f"'resolve {label} repo' to restore")
+                    continue
+                if h_hash == last:  # covers both None (never synced -> provision)
+                    result["push"].append(f"push {label} -> {h}")
+                    if dry_run:
+                        continue
+                    if dst.exists():
+                        backup_skill(paths, h, name, dst)
+                    copy_skill(repo_asset, dst)
+                    entry[h] = repo_hash
+                else:
+                    result["conflict"].append(f"conflict {label} : {h}")
+    if not dry_run:
+        save_state(paths, state)
+    return result
+
+
+def resolve_conflict(paths: Paths, name: str, winner: str,
+                     kind: str = "skills") -> list[str]:
+    man = load_manifest(paths.manifest)
+    if name not in man.get(kind, {}):
+        raise KeyError(name)
+    if winner != "repo" and winner not in paths.harness_skills:
+        raise ValueError(winner)
+    if winner != "repo":
+        refresh_skill(paths, name, winner, kind)
+    targets = [t for t in man[kind][name].get("targets", []) if t != "ignore"]
+    return apply_skill(paths, name, targets, False, kind)
 
 
 def _mcp_harness_servers(paths: Paths) -> dict[str, dict[str, dict]]:
@@ -870,6 +979,19 @@ def cmd_apply(paths: Paths, dry_run: bool, prune: bool = False) -> None:
         print(f"{prefix}{c}")
 
 
+def cmd_sync(paths: Paths, dry_run: bool) -> int:
+    r = two_way_sync(paths, dry_run)
+    prefix = "[dry-run] " if dry_run else ""
+    for line in r["pull"] + r["push"] + r["conflict"] + r["warn"]:
+        print(f"{prefix}{line}")
+    if r["conflict"]:
+        print(f"{len(r['conflict'])} conflict(s) — resolve with: "
+              f"harness_sync.py resolve <kind:name> <repo|harness>")
+    if not any(r.values()):
+        print("everything in sync")
+    return 1 if r["conflict"] or r["warn"] else 0
+
+
 def cmd_harness_list(paths: Paths) -> None:
     for name, skills in paths.harness_skills.items():
         print(f"{name:16} base={skills.parent}  skills={skills}")
@@ -1059,6 +1181,12 @@ def main(argv: list[str] | None = None) -> int:
     psub.add_parser("sync-adopt", help="interactively track plugin installs in the manifest")
     psa = psub.add_parser("sync-apply", help="push tracked plugin installs to Claude accounts")
     psa.add_argument("--dry-run", action="store_true")
+    syp = sub.add_parser("sync", help="two-way sync: pull harness-only changes, "
+                                      "push repo-only changes, report conflicts")
+    syp.add_argument("--dry-run", action="store_true")
+    rvp = sub.add_parser("resolve", help="resolve a sync conflict by picking a winner")
+    rvp.add_argument("name", help="asset as kind:name (skills unprefixed)")
+    rvp.add_argument("winner", help="'repo' or a harness name")
     sub.add_parser("tui", help="launch the full-screen dashboard (requires textual)")
     up = sub.add_parser("untrack", help="stop managing a skill (repo copy backed up; harnesses untouched)")
     up.add_argument("name")
@@ -1121,6 +1249,22 @@ def main(argv: list[str] | None = None) -> int:
             cmd_settings_adopt(paths)
         elif args.saction == "apply":
             cmd_settings_apply(paths, args.dry_run)
+    elif args.cmd == "sync":
+        return cmd_sync(paths, args.dry_run)
+    elif args.cmd == "resolve":
+        kind, name = parse_asset_name(args.name)
+        try:
+            changes = resolve_conflict(paths, name, args.winner, kind)
+        except KeyError:
+            print(f"error: '{args.name}' is not tracked", file=sys.stderr)
+            return 1
+        except ValueError:
+            print(f"error: unknown winner '{args.winner}' (use 'repo' or a "
+                  f"harness name)", file=sys.stderr)
+            return 1
+        for c in changes:
+            print(c)
+        print(f"resolved '{args.name}' — winner: {args.winner}")
     elif args.cmd == "tui":
         try:
             from harness_tui import run as tui_run

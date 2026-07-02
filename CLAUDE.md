@@ -50,6 +50,19 @@ repo. Each user builds their own canonical store via `adopt`.
   manifest skills to their target harnesses. Idempotent. `--prune` also deletes
   tracked skills from harnesses they are de-targeted from (backup first;
   `ignore`/foreign skills always spared).
+- `python3 harness_sync.py sync [--dry-run]` — **opt-in two-way sync** for
+  file-based kinds: pulls harness-only changes into the repo, pushes repo-only
+  changes, and reports true conflicts (both sides changed) without touching
+  anything. Detection compares repo/harness hashes against a last-synced
+  baseline in `.sync-state.json` (repo root, gitignored), recorded by
+  apply/refresh/adopt/sync. Missing baseline + difference = conflict
+  (conservative first run). Deletions never propagate (warn only). Exits 1
+  while conflicts/warnings remain. Config domains (mcp/plugins/settings) stay
+  one-way.
+- `python3 harness_sync.py resolve <kind:name> <repo|harness>` — explicit
+  conflict resolution: the winner becomes the repo canonical (harness winner
+  is refreshed in first), then it is pushed to all targets with backups.
+  Core: `resolve_conflict()` (KeyError if untracked, ValueError bad winner).
 - `python3 harness_sync.py refresh <name> [source]` — re-import a tracked,
   drifted skill's content from a harness into the repo (previous repo copy
   backed up; manifest untouched). Source defaults to the only drifted harness.
@@ -132,9 +145,12 @@ Follow TDD: write the failing test first, then the minimal implementation.
 - Keep `harness_sync.py` as one focused module unless it genuinely grows too
   large.
 
-## Non-goals (v1)
+## Non-goals (v1) — since shipped
 
-Two-way auto propagation with conflict resolution. (MCP sync, untrack/pruning,
-asset kinds — agents/commands — and instruction-file sync shipped after v1.)
+The v1 non-goals have all shipped since: MCP sync, untrack/pruning, asset
+kinds (agents/commands), instruction-file sync, whole-plugin sync, settings
+sync, and two-way sync with conflict detection (`sync`/`resolve`, opt-in —
+one-way `apply` remains the default). Automatic merging of conflicting edits
+remains out of scope: conflicts always require an explicit winner.
 
 Design and plan live under `docs/superpowers/`.
