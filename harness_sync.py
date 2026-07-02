@@ -20,6 +20,7 @@ class Paths:
     backups: Path
     registry: Path
     harness_skills: dict[str, Path]
+    harness_types: dict[str, str]
 
 
 def default_harnesses() -> dict[str, Path]:
@@ -41,6 +42,19 @@ def load_harnesses(repo_root: Path) -> dict[str, Path]:
     return {name: Path(cfg["base"]).expanduser() for name, cfg in data["harnesses"].items()}
 
 
+def infer_type(name: str) -> str:
+    return "codex" if name == "codex" else "claude"
+
+
+def load_harness_types(repo_root: Path) -> dict[str, str]:
+    path = registry_path(repo_root)
+    if not path.exists():
+        return {name: infer_type(name) for name in default_harnesses()}
+    data = json.loads(path.read_text())
+    return {name: cfg.get("type", infer_type(name))
+            for name, cfg in data["harnesses"].items()}
+
+
 def resolve_paths(repo_root: Path) -> Paths:
     bases = load_harnesses(repo_root)
     return Paths(
@@ -49,6 +63,7 @@ def resolve_paths(repo_root: Path) -> Paths:
         backups=repo_root / ".harness-sync-backups",
         registry=registry_path(repo_root),
         harness_skills={name: base / "skills" for name, base in bases.items()},
+        harness_types=load_harness_types(repo_root),
     )
 
 
@@ -128,13 +143,100 @@ def save_registry(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def harness_add(paths: Paths, name: str, base: str) -> None:
+def harness_add(paths: Paths, name: str, base: str, type: str | None = None) -> None:
     if not paths.registry.exists():
         data = {"harnesses": {n: {"base": str(b)} for n, b in default_harnesses().items()}}
     else:
         data = load_registry(paths.registry)
-    data["harnesses"][name] = {"base": base}
+    entry: dict = {"base": base}
+    if type:
+        entry["type"] = type
+    data["harnesses"][name] = entry
     save_registry(paths.registry, data)
+
+
+def _require_tomllib():
+    try:
+        import tomllib
+        return tomllib
+    except ImportError:
+        raise RuntimeError(
+            "MCP sync requires Python 3.11+ (tomllib) — run with python3.11 or newer")
+
+
+def mcp_config_path(base: Path, htype: str) -> Path:
+    if htype == "codex":
+        return base / "config.toml"
+    p = base / ".claude.json"
+    if p.exists():
+        return p
+    if base == Path.home() / ".claude":
+        return Path.home() / ".claude.json"
+    return p
+
+
+def read_mcp_servers(path: Path, htype: str) -> dict[str, dict]:
+    if not path.exists():
+        return {}
+    if htype == "codex":
+        tomllib = _require_tomllib()
+        return tomllib.loads(path.read_text()).get("mcp_servers", {})
+    return json.loads(path.read_text()).get("mcpServers", {})
+
+
+def _toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, str):
+        return json.dumps(v)  # JSON escaping is valid for TOML basic strings
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    raise ValueError(f"unsupported TOML value: {v!r}")
+
+
+def _toml_server_block(name: str, cfg: dict) -> str:
+    lines = [f"[mcp_servers.{name}]"]
+    subtables = {}
+    for k, v in cfg.items():
+        if isinstance(v, dict):
+            subtables[k] = v
+            continue
+        lines.append(f"{k} = {_toml_value(v)}")
+    for k, sub in subtables.items():
+        lines.append(f"\n[mcp_servers.{name}.{k}]")
+        for kk, vv in sub.items():
+            lines.append(f"{kk} = {_toml_value(vv)}")
+    return "\n".join(lines) + "\n"
+
+
+def _strip_mcp_blocks(text: str, names: set[str]) -> str:
+    out, skip = [], False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            header = stripped[1:-1]
+            if header.startswith("mcp_servers."):
+                skip = header.split(".")[1] in names
+            else:
+                skip = False
+        if not skip:
+            out.append(line)
+    return "".join(out)
+
+
+def write_mcp_servers(path: Path, htype: str, servers: dict[str, dict]) -> None:
+    if htype == "codex":
+        _require_tomllib()  # version gate before touching anything
+        text = path.read_text() if path.exists() else ""
+        text = _strip_mcp_blocks(text, set(servers)).rstrip("\n")
+        blocks = "\n".join(_toml_server_block(n, c) for n, c in sorted(servers.items()))
+        path.write_text((text + "\n\n" if text else "") + blocks)
+    else:
+        data = json.loads(path.read_text()) if path.exists() else {}
+        data.setdefault("mcpServers", {}).update(servers)
+        path.write_text(json.dumps(data, indent=2) + "\n")
 
 
 def harness_remove(paths: Paths, name: str) -> None:
@@ -268,6 +370,75 @@ def prune_all(paths: Paths, dry_run: bool = False) -> list[str]:
     return changes
 
 
+def _mcp_harness_servers(paths: Paths) -> dict[str, dict[str, dict]]:
+    result: dict[str, dict[str, dict]] = {}
+    for h, skills_dir in paths.harness_skills.items():
+        htype = paths.harness_types[h]
+        result[h] = read_mcp_servers(mcp_config_path(skills_dir.parent, htype), htype)
+    return result
+
+
+def mcp_states(paths: Paths) -> list[dict]:
+    man = load_manifest(paths.manifest).get("mcp", {})
+    harness = _mcp_harness_servers(paths)
+    names = set(man) | {n for m in harness.values() for n in m}
+    rows = []
+    for name in sorted(names):
+        tracked = man.get(name)
+        row = {"name": name, "repo": tracked is not None}
+        for h in paths.harness_skills:
+            cfg = harness[h].get(name)
+            if cfg is None:
+                row[h] = "absent"
+            elif tracked is None:
+                row[h] = "untracked"
+            elif cfg == tracked["config"]:
+                row[h] = "synced"
+            else:
+                row[h] = "drift"
+        rows.append(row)
+    return rows
+
+
+def mcp_adopt_server(paths: Paths, name: str, source_harness: str, targets: list[str]) -> None:
+    htype = paths.harness_types[source_harness]
+    servers = read_mcp_servers(
+        mcp_config_path(paths.harness_skills[source_harness].parent, htype), htype)
+    man = load_manifest(paths.manifest)
+    man.setdefault("mcp", {})[name] = {"targets": list(targets), "config": servers[name]}
+    save_manifest(paths.manifest, man)
+
+
+def mcp_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
+    man = load_manifest(paths.manifest).get("mcp", {})
+    current = _mcp_harness_servers(paths)
+    pending: dict[str, dict[str, dict]] = {}
+    changes: list[str] = []
+    for name, cfg in sorted(man.items()):
+        targets = cfg.get("targets", [])
+        if "ignore" in targets:
+            continue
+        for t in targets:
+            if t not in paths.harness_skills:
+                print(f"warning: mcp server '{name}' targets unknown harness '{t}' — skipping",
+                      file=sys.stderr)
+                continue
+            if current[t].get(name) == cfg["config"]:
+                continue
+            pending.setdefault(t, {})[name] = cfg["config"]
+            changes.append(f"{name} -> {t}")
+    if not dry_run:
+        for h, servers in pending.items():
+            htype = paths.harness_types[h]
+            path = mcp_config_path(paths.harness_skills[h].parent, htype)
+            if path.exists():
+                backup = paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S") / h / "_mcp" / path.name
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, backup)
+            write_mcp_servers(path, htype, servers)
+    return changes
+
+
 def cmd_status(paths: Paths) -> None:
     names = list(paths.harness_skills)
     rows = compute_states(paths)
@@ -360,6 +531,46 @@ def cmd_plugins_adopt(paths: Paths) -> None:
         print(msg)
 
 
+def cmd_mcp_list(paths: Paths) -> None:
+    names = list(paths.harness_skills)
+    rows = mcp_states(paths)
+    if not rows:
+        print("no mcp servers found")
+        return
+    w = {h: max(len(h), 10) for h in names}
+    print(f"{'SERVER':24} {'REPO':5} " + " ".join(f"{h:{w[h]}}" for h in names))
+    for r in rows:
+        cells = " ".join(f"{r[h]:{w[h]}}" for h in names)
+        print(f"{r['name']:24} {'yes' if r['repo'] else 'no':5} " + cells)
+
+
+def cmd_mcp_adopt(paths: Paths) -> None:
+    names = list(paths.harness_skills)
+    for row in mcp_states(paths):
+        name = row["name"]
+        available = [h for h in names if row[h] in ("untracked", "drift")]
+        if not available:
+            continue
+        status = ", ".join(f"{h}:{row[h]}" for h in names)
+        print(f"\nMCP server: {name}  ({status})")
+        if input("  adopt? [y/N]: ").strip().lower() != "y":
+            continue
+        source = available[0] if len(available) == 1 else _prompt("  source", available)
+        targets = _prompt_targets(names)
+        mcp_adopt_server(paths, name, source, targets)
+        print(f"  adopted {name} from {source} -> {targets}")
+
+
+def cmd_mcp_apply(paths: Paths, dry_run: bool) -> None:
+    changes = mcp_apply_all(paths, dry_run)
+    prefix = "[dry-run] " if dry_run else ""
+    if not changes:
+        print("nothing to do")
+        return
+    for c in changes:
+        print(f"{prefix}{c}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="harness-sync")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -375,6 +586,8 @@ def main(argv: list[str] | None = None) -> int:
     ha = hsub.add_parser("add", help="add/update a harness")
     ha.add_argument("name")
     ha.add_argument("base")
+    ha.add_argument("type", nargs="?", default=None,
+                    help="harness type: claude or codex (default: inferred)")
     hr = hsub.add_parser("remove", help="remove a harness")
     hr.add_argument("name")
     pp = sub.add_parser("plugins", help="discover and adopt plugin-bundled skills")
@@ -384,6 +597,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("tui", help="launch the full-screen dashboard (requires textual)")
     up = sub.add_parser("untrack", help="stop managing a skill (repo copy backed up; harnesses untouched)")
     up.add_argument("name")
+    mp = sub.add_parser("mcp", help="sync MCP server definitions between harnesses")
+    msub = mp.add_subparsers(dest="maction", required=True)
+    msub.add_parser("list", help="show MCP server states across harnesses")
+    msub.add_parser("adopt", help="interactively import MCP servers into the manifest")
+    map_ = msub.add_parser("apply", help="push manifest MCP servers to harnesses")
+    map_.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
     try:
@@ -402,7 +621,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.haction == "list":
             cmd_harness_list(paths)
         elif args.haction == "add":
-            harness_add(paths, args.name, args.base)
+            harness_add(paths, args.name, args.base, args.type)
             print(f"added harness '{args.name}' -> {args.base}")
         elif args.haction == "remove":
             harness_remove(paths, args.name)
@@ -426,6 +645,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: '{args.name}' is not tracked", file=sys.stderr)
             return 1
         print(f"untracked '{args.name}' (repo copy backed up; harnesses untouched)")
+    elif args.cmd == "mcp":
+        try:
+            if args.maction == "list":
+                cmd_mcp_list(paths)
+            elif args.maction == "adopt":
+                cmd_mcp_adopt(paths)
+            elif args.maction == "apply":
+                cmd_mcp_apply(paths, args.dry_run)
+        except RuntimeError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
     return 0
 
 

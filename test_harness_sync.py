@@ -77,6 +77,7 @@ def _paths_in(t: Path) -> "hs.Paths":
         backups=t / "repo" / ".backups",
         registry=t / "repo" / "harnesses.json",
         harness_skills={"claude": t / "cc" / "skills", "codex": t / "cx" / "skills"},
+        harness_types={"claude": "claude", "codex": "codex"},
     )
 
 
@@ -253,6 +254,7 @@ def _paths_in_3(t: Path) -> "hs.Paths":
             "claude-perso": t / "cp" / "skills",
             "codex": t / "cx" / "skills",
         },
+        harness_types={"claude": "claude", "claude-perso": "claude", "codex": "codex"},
     )
 
 
@@ -538,6 +540,184 @@ def test_discover_plugins_nested_layout_with_dedupe():
         names = [n for n, _ in plugins[0]["skills"]]
         assert names == ["dup", "lazy"]                                  # nested-only found
         assert dict(plugins[0]["skills"])["dup"] == canonical_dup        # canonical wins
+
+
+def test_harness_types_inferred_and_explicit():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        repo.mkdir()
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "claude": {"base": "~/.claude"},
+            "codex": {"base": "~/.codex"},
+            "work": {"base": "~/wk"},
+            "cx2": {"base": "~/cx2", "type": "codex"},
+        }}))
+        types = hs.load_harness_types(repo)
+        assert types == {"claude": "claude", "codex": "codex",
+                         "work": "claude", "cx2": "codex"}
+
+
+def test_resolve_paths_carries_types():
+    with tempfile.TemporaryDirectory() as t:
+        os.environ["CLAUDE_CONFIG_DIR"] = str(Path(t) / "cc")
+        os.environ["CODEX_HOME"] = str(Path(t) / "cx")
+        try:
+            paths = hs.resolve_paths(Path(t) / "repo")
+            assert paths.harness_types == {"claude": "claude", "codex": "codex"}
+        finally:
+            del os.environ["CLAUDE_CONFIG_DIR"]
+            del os.environ["CODEX_HOME"]
+
+
+def test_harness_add_with_type():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        p.registry.parent.mkdir(parents=True, exist_ok=True)
+        hs.harness_add(p, "cx2", "~/cx2", "codex")
+        data = hs.load_registry(p.registry)
+        assert data["harnesses"]["cx2"] == {"base": "~/cx2", "type": "codex"}
+
+
+def _tomllib_available() -> bool:
+    try:
+        import tomllib  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def test_mcp_config_path_rules():
+    with tempfile.TemporaryDirectory() as t:
+        base = Path(t) / "cx"
+        assert hs.mcp_config_path(base, "codex") == base / "config.toml"
+        cbase = Path(t) / "cc"
+        cbase.mkdir()
+        (cbase / ".claude.json").write_text("{}")
+        assert hs.mcp_config_path(cbase, "claude") == cbase / ".claude.json"
+        home_claude = Path.home() / ".claude"
+        if not (home_claude / ".claude.json").exists() and (Path.home() / ".claude.json").exists():
+            assert hs.mcp_config_path(home_claude, "claude") == Path.home() / ".claude.json"
+
+
+def test_read_mcp_servers_json_and_missing():
+    with tempfile.TemporaryDirectory() as t:
+        f = Path(t) / ".claude.json"
+        assert hs.read_mcp_servers(f, "claude") == {}
+        f.write_text(json.dumps({"other": 1, "mcpServers": {
+            "srv": {"command": "x", "args": ["a"], "env": {"K": "v"}}}}))
+        servers = hs.read_mcp_servers(f, "claude")
+        assert servers["srv"]["command"] == "x"
+
+
+def test_read_mcp_servers_toml():
+    if not _tomllib_available():
+        return
+    with tempfile.TemporaryDirectory() as t:
+        f = Path(t) / "config.toml"
+        f.write_text('model = "gpt"\n\n[mcp_servers.srv]\ncommand = "x"\nargs = ["a"]\n\n[mcp_servers.srv.env]\nK = "v"\n')
+        servers = hs.read_mcp_servers(f, "codex")
+        assert servers == {"srv": {"command": "x", "args": ["a"], "env": {"K": "v"}}}
+
+
+def test_write_mcp_servers_json_preserves_other_keys():
+    with tempfile.TemporaryDirectory() as t:
+        f = Path(t) / ".claude.json"
+        f.write_text(json.dumps({"theme": "dark", "mcpServers": {
+            "keep": {"command": "k"}, "old": {"command": "v1"}}}))
+        hs.write_mcp_servers(f, "claude", {"old": {"command": "v2"}, "new": {"command": "n"}})
+        data = json.loads(f.read_text())
+        assert data["theme"] == "dark"                       # unrelated key preserved
+        assert data["mcpServers"]["keep"] == {"command": "k"}  # unmanaged preserved
+        assert data["mcpServers"]["old"] == {"command": "v2"}  # updated
+        assert data["mcpServers"]["new"] == {"command": "n"}   # added
+
+
+def test_write_mcp_servers_toml_splice_preserves_bytes():
+    if not _tomllib_available():
+        return
+    import tomllib
+    with tempfile.TemporaryDirectory() as t:
+        f = Path(t) / "config.toml"
+        f.write_text(
+            '# my precious comment\nmodel = "gpt"\n\n'
+            '[mcp_servers.keep]\ncommand = "k"\n\n'
+            '[mcp_servers.old]\ncommand = "v1"\n\n[mcp_servers.old.env]\nA = "1"\n'
+        )
+        hs.write_mcp_servers(f, "codex", {
+            "old": {"command": "v2", "args": ["x"], "env": {"B": "2"}},
+            "new": {"command": "n"},
+        })
+        text = f.read_text()
+        assert "# my precious comment" in text               # comments preserved
+        assert 'model = "gpt"' in text
+        data = tomllib.loads(text)
+        assert data["mcp_servers"]["keep"] == {"command": "k"}       # unmanaged intact
+        assert data["mcp_servers"]["old"] == {"command": "v2", "args": ["x"], "env": {"B": "2"}}
+        assert data["mcp_servers"]["new"] == {"command": "n"}
+
+
+def _mcp_paths(t: Path) -> "hs.Paths":
+    p = _paths_in(t)
+    (t / "cc").mkdir(parents=True, exist_ok=True)
+    (t / "cc" / ".claude.json").write_text(json.dumps({"mcpServers": {
+        "alpha": {"command": "a"}, "solo": {"command": "s"}}}))
+    (t / "cx").mkdir(parents=True, exist_ok=True)
+    (t / "cx" / "config.toml").write_text('model = "gpt"\n\n[mcp_servers.alpha]\ncommand = "OLD"\n')
+    p.manifest.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def test_mcp_states_and_adopt():
+    if not _tomllib_available():
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _mcp_paths(Path(tmp))
+        rows = {r["name"]: r for r in hs.mcp_states(p)}
+        assert rows["alpha"]["claude"] == "untracked"
+        assert rows["solo"]["codex"] == "absent"
+
+        hs.mcp_adopt_server(p, "alpha", "claude", ["claude", "codex"])
+        man = hs.load_manifest(p.manifest)
+        assert man["mcp"]["alpha"] == {"targets": ["claude", "codex"],
+                                       "config": {"command": "a"}}
+        rows = {r["name"]: r for r in hs.mcp_states(p)}
+        assert rows["alpha"]["claude"] == "synced"
+        assert rows["alpha"]["codex"] == "drift"   # codex still has OLD
+
+
+def test_mcp_apply_pushes_both_formats_idempotent():
+    if not _tomllib_available():
+        return
+    import tomllib
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _mcp_paths(t)
+        hs.mcp_adopt_server(p, "alpha", "claude", ["claude", "codex"])
+
+        changes = hs.mcp_apply_all(p)
+        assert changes == ["alpha -> codex"]                       # claude already synced
+        toml_text = (t / "cx" / "config.toml").read_text()
+        assert 'model = "gpt"' in toml_text                        # unrelated preserved
+        assert tomllib.loads(toml_text)["mcp_servers"]["alpha"] == {"command": "a"}
+        assert list(p.backups.rglob("_mcp/config.toml"))           # backup exists
+
+        assert hs.mcp_apply_all(p) == []                           # idempotent
+
+
+def test_mcp_apply_dry_run_and_unknown_target():
+    if not _tomllib_available():
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _mcp_paths(t)
+        hs.mcp_adopt_server(p, "alpha", "claude", ["ghost", "codex"])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = hs.mcp_apply_all(p, dry_run=True)
+        assert changes == ["alpha -> codex"]
+        assert "ghost" in err.getvalue()
+        assert "OLD" in (t / "cx" / "config.toml").read_text()     # dry-run wrote nothing
 
 
 if __name__ == "__main__":
