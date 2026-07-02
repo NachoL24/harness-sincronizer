@@ -1224,6 +1224,90 @@ def test_cli_plugin_sync_list_and_apply_dry_run():
         assert "not yet installed" in text   # footnote
 
 
+def _settings_paths(t: Path) -> "hs.Paths":
+    p = hs.Paths(
+        repo_skills=t / "repo" / "skills",
+        manifest=t / "repo" / "manifest.json",
+        backups=t / "repo" / ".backups",
+        registry=t / "repo" / "harnesses.json",
+        harness_skills={"cc": t / "cc" / "skills", "cp": t / "cp" / "skills",
+                        "cx": t / "cx" / "skills"},
+        harness_types={"cc": "claude", "cp": "claude", "cx": "codex"},
+    )
+    for d in ("cc", "cp", "cx", "repo"):
+        (t / d).mkdir(parents=True, exist_ok=True)
+    hook_val = {"UserPromptSubmit": [{"hooks": [
+        {"type": "command", "command": f"bash {t}/cc/hooks/n.sh"}]}]}
+    (t / "cc" / "settings.json").write_text(json.dumps({
+        "theme": "dark", "hooks": hook_val, "model": "opus",
+        "enabledPlugins": {"x@y": True},
+    }))
+    (t / "cc" / "hooks").mkdir(parents=True, exist_ok=True)
+    (t / "cc" / "hooks" / "n.sh").write_text("echo v1")
+    (t / "cp" / "settings.json").write_text(json.dumps({"model": "sonnet"}))
+    hs.save_manifest(p.manifest, {"skills": {}})
+    return p
+
+
+def test_settings_canonicalize_resolve_and_refs():
+    base = Path("/home/u/.claude")
+    raw = {"type": "command",
+           "command": "bash /home/u/.claude/hooks/n.sh && echo hi",
+           "other": ["/home/u/.claude-other/keep.sh", 3, True]}
+    home_base = Path.home() / ".claude"
+    v = hs.canonicalize_value(
+        {"cmd": f"bash {home_base}/a.sh; run ~/.claude/b.py"}, home_base)
+    assert v == {"cmd": "bash ${HARNESS_BASE}/a.sh; run ${HARNESS_BASE}/b.py"}
+    c = hs.canonicalize_value(raw, base)
+    assert c["command"].startswith("bash ${HARNESS_BASE}/hooks/n.sh")
+    assert c["other"][0] == "/home/u/.claude-other/keep.sh"  # foreign base kept
+    assert c["other"][1:] == [3, True]                       # non-strings intact
+    r = hs.resolve_value(c, Path("/mnt/.claude-perso"))
+    assert r["command"].startswith("bash /mnt/.claude-perso/hooks/n.sh")
+    assert hs.referenced_paths(c) == {"hooks/n.sh"}
+
+
+def test_settings_states_vocab_and_exclusions():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _settings_paths(t)
+        hs.settings_adopt(p, "hooks", "cc", ["cc", "cp"])
+        rows = {r["name"]: r for r in hs.settings_states(p)}
+        assert rows["hooks"]["repo"] is True
+        assert rows["hooks"]["cc"] == "synced"
+        assert rows["hooks"]["cp"] == "absent"
+        assert "cx" not in rows["hooks"]
+        assert rows["model"]["repo"] is False
+        assert rows["model"]["cc"] == "untracked"
+        assert rows["model"]["cp"] == "untracked"
+        assert "enabledPlugins" not in rows        # excluded (plugin domain)
+        assert "theme" in rows                     # any other key is fair game
+        (t / "cc" / "hooks" / "n.sh").write_text("echo v2")
+        rows = {r["name"]: r for r in hs.settings_states(p)}
+        assert rows["hooks"]["cc"] == "drift"      # referenced-file drift
+
+
+def test_settings_adopt_canonicalizes_and_copies_refs():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _settings_paths(t)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            hs.settings_adopt(p, "hooks", "cc", ["cc", "cp"])
+        man = hs.load_manifest(p.manifest)["settings"]["hooks"]
+        assert man["targets"] == ["cc", "cp"]
+        cmd = man["value"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        assert cmd == "bash ${HARNESS_BASE}/hooks/n.sh"
+        assert (t / "repo" / "settings-files" / "hooks" / "n.sh").read_text() == "echo v1"
+        cc = json.loads((t / "cc" / "settings.json").read_text())
+        cc["statusLine"] = {"command": f"bash {t}/cc/missing.sh"}
+        (t / "cc" / "settings.json").write_text(json.dumps(cc))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            hs.settings_adopt(p, "statusLine", "cc", ["cc"])
+        assert "missing.sh" in err.getvalue()
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

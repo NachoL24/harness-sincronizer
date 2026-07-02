@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -666,6 +667,98 @@ def plugin_sync_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(settings, indent=2) + "\n")
     return changes
+
+
+SETTINGS_EXCLUDED = {"enabledPlugins", "extraKnownMarketplaces"}
+BASE_TOKEN = "${HARNESS_BASE}"
+_REF_RE = re.compile(r"\$\{HARNESS_BASE\}/((?:[\w@%+=:,.^-]+/)*[\w@%+=:,.^-]+)")
+
+
+def _walk_strings(value, fn):
+    if isinstance(value, str):
+        return fn(value)
+    if isinstance(value, list):
+        return [_walk_strings(v, fn) for v in value]
+    if isinstance(value, dict):
+        return {k: _walk_strings(v, fn) for k, v in value.items()}
+    return value
+
+
+def canonicalize_value(value, base: Path):
+    subs = [str(base)]
+    home = str(Path.home())
+    if str(base).startswith(home + os.sep):
+        subs.append("~" + str(base)[len(home):])
+    # path boundary: don't rewrite e.g. ~/.claude-other when base is ~/.claude
+    pattern = re.compile(
+        "(?:" + "|".join(re.escape(t) for t in subs) + r")(?![\w.-])")
+
+    return _walk_strings(value, lambda s: pattern.sub(BASE_TOKEN, s))
+
+
+def resolve_value(value, base: Path):
+    return _walk_strings(value, lambda s: s.replace(BASE_TOKEN, str(base)))
+
+
+def referenced_paths(value) -> set[str]:
+    found: set[str] = set()
+    _walk_strings(value, lambda s: (found.update(_REF_RE.findall(s)), s)[1])
+    return found
+
+
+def _settings_files_dir(paths: Paths) -> Path:
+    return paths.repo_skills.parent / "settings-files"
+
+
+def settings_states(paths: Paths) -> list[dict]:
+    man = load_manifest(paths.manifest).get("settings", {})
+    names = _claude_harnesses(paths)
+    raw = {h: read_settings(_harness_base(paths, h) / "settings.json")
+           for h in names}
+    keys = (set(man) | {k for d in raw.values() for k in d}) - SETTINGS_EXCLUDED
+    rows = []
+    for key in sorted(keys):
+        tracked = man.get(key)
+        row = {"name": key, "repo": tracked is not None}
+        for h in names:
+            if key not in raw[h]:
+                row[h] = "absent"
+            elif tracked is None:
+                row[h] = "untracked"
+            else:
+                base = _harness_base(paths, h)
+                same = canonicalize_value(raw[h][key], base) == tracked["value"]
+                if same:
+                    for rel in referenced_paths(tracked["value"]):
+                        repo_f = _settings_files_dir(paths) / rel
+                        tgt = base / rel
+                        if repo_f.is_file() and (not tgt.is_file()
+                                                 or skill_hash(tgt) != skill_hash(repo_f)):
+                            same = False
+                            break
+                row[h] = "synced" if same else "drift"
+        rows.append(row)
+    return rows
+
+
+def settings_adopt(paths: Paths, key: str, source_harness: str,
+                   targets: list[str]) -> None:
+    base = _harness_base(paths, source_harness)
+    value = canonicalize_value(
+        read_settings(base / "settings.json")[key], base)
+    for rel in sorted(referenced_paths(value)):
+        src = base / rel
+        if src.is_file():
+            dst = _settings_files_dir(paths) / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        else:
+            print(f"warning: settings '{key}' references '{rel}' but "
+                  f"{src} does not exist — string synced, file skipped",
+                  file=sys.stderr)
+    man = load_manifest(paths.manifest)
+    man.setdefault("settings", {})[key] = {"targets": list(targets), "value": value}
+    save_manifest(paths.manifest, man)
 
 
 def cmd_status(paths: Paths) -> None:
