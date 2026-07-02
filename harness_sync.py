@@ -71,7 +71,11 @@ KINDS = {
     "skills": {"asset": "dir", "claude_only": False},
     "agents": {"asset": "file", "claude_only": True},
     "commands": {"asset": "file", "claude_only": True},
+    "instructions": {"asset": "file", "claude_only": False,
+                     "names": {"claude": "CLAUDE.md", "codex": "AGENTS.md"}},
 }
+
+FIXED_ASSET = "global.md"
 
 
 def parse_asset_name(s: str) -> tuple[str, str]:
@@ -124,6 +128,24 @@ def harness_kind_dir(paths: Paths, harness: str, kind: str) -> Path | None:
 
 def repo_kind_dir(paths: Paths, kind: str) -> Path:
     return paths.repo_skills.parent / kind
+
+
+def harness_asset_path(paths: Paths, harness: str, kind: str, name: str) -> Path | None:
+    spec = KINDS[kind]
+    if spec["claude_only"] and paths.harness_types[harness] == "codex":
+        return None
+    base = paths.harness_skills[harness].parent
+    if "names" in spec:
+        return base / spec["names"][paths.harness_types[harness]]
+    return base / kind / name
+
+
+def _harness_kind_scan(paths: Paths, harness: str, kind: str) -> dict[str, str]:
+    if "names" in KINDS[kind]:
+        p = harness_asset_path(paths, harness, kind, FIXED_ASSET)
+        return {FIXED_ASSET: skill_hash(p)} if p and p.is_file() else {}
+    hd = harness_kind_dir(paths, harness, kind)
+    return scan_kind(hd, kind) if hd is not None else {}
 
 
 def read_installed_plugins(plugins_dir: Path) -> list[tuple[str, Path]]:
@@ -291,10 +313,7 @@ def harness_remove(paths: Paths, name: str) -> None:
 def compute_states(paths: Paths, kind: str = "skills") -> list[dict]:
     repo = scan_kind(repo_kind_dir(paths, kind), kind)
     names = list(paths.harness_skills)
-    harness = {}
-    for h in names:
-        hd = harness_kind_dir(paths, h, kind)
-        harness[h] = scan_kind(hd, kind) if hd is not None else {}
+    harness = {h: _harness_kind_scan(paths, h, kind) for h in names}
     all_names = set(repo) | {n for m in harness.values() for n in m}
     rows = []
     for name in sorted(all_names):
@@ -345,7 +364,7 @@ def import_skill(paths: Paths, name: str, src_dir: Path, targets: list[str],
 
 def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str],
                 kind: str = "skills") -> None:
-    src = harness_kind_dir(paths, source_harness, kind) / name
+    src = harness_asset_path(paths, source_harness, kind, name)
     import_skill(paths, name, src, targets, kind)
 
 
@@ -368,7 +387,7 @@ def refresh_skill(paths: Paths, name: str, source_harness: str, kind: str = "ski
     repo_asset = repo_kind_dir(paths, kind) / name
     if repo_asset.exists():
         backup_skill(paths, "repo", name, repo_asset)
-    copy_skill(harness_kind_dir(paths, source_harness, kind) / name, repo_asset)
+    copy_skill(harness_asset_path(paths, source_harness, kind, name), repo_asset)
 
 
 def _remove_asset(path: Path) -> None:
@@ -398,12 +417,11 @@ def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = Fal
     for h in targets:
         if h not in paths.harness_skills:
             continue
-        hd = harness_kind_dir(paths, h, kind)
-        if hd is None:
+        dst = harness_asset_path(paths, h, kind, name)
+        if dst is None:
             print(f"warning: {kind} '{name}' cannot target codex-type harness '{h}' — skipping",
                   file=sys.stderr)
             continue
-        dst = hd / name
         if dst.exists() and skill_hash(dst) == src_hash:
             continue
         changes.append(f"{format_asset_name(kind, name)} -> {h}")
@@ -442,11 +460,8 @@ def prune_all(paths: Paths, dry_run: bool = False) -> list[str]:
             for h in paths.harness_skills:
                 if h in targets:
                     continue
-                hd = harness_kind_dir(paths, h, kind)
-                if hd is None:
-                    continue
-                dst = hd / name
-                if not dst.exists():
+                dst = harness_asset_path(paths, h, kind, name)
+                if dst is None or not dst.exists():
                     continue
                 changes.append(f"{format_asset_name(kind, name)} -x {h}")
                 if dry_run:
