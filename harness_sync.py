@@ -197,6 +197,18 @@ def adopt_plugin(paths: Paths, plugin: dict, targets: list[str]) -> tuple[list[s
     return adopted, skipped
 
 
+def untrack_skill(paths: Paths, name: str) -> None:
+    man = load_manifest(paths.manifest)
+    if name not in man["skills"]:
+        raise KeyError(name)
+    del man["skills"][name]
+    save_manifest(paths.manifest, man)
+    repo_dir = paths.repo_skills / name
+    if repo_dir.is_dir():
+        backup_skill(paths, "repo", name, repo_dir)
+        shutil.rmtree(repo_dir)
+
+
 def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = False) -> list[str]:
     src = paths.repo_skills / name
     src_hash = skill_hash(src)

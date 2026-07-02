@@ -402,6 +402,35 @@ def test_tui_harness_add_via_real_click():
         asyncio.run(go())
 
 
+def test_untrack_removes_manifest_and_repo_with_backup():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "v1"})
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "v1"})
+        hs.save_manifest(p.manifest, {"skills": {"alpha": {"targets": ["claude"]}}})
+
+        hs.untrack_skill(p, "alpha")
+
+        assert "alpha" not in hs.load_manifest(p.manifest)["skills"]
+        assert not (p.repo_skills / "alpha").exists()                      # repo copy gone
+        backups = list(p.backups.rglob("repo/alpha/SKILL.md"))
+        assert backups and backups[0].read_text() == "v1"                  # backed up
+        assert (p.harness_skills["claude"] / "alpha" / "SKILL.md").exists()  # harness untouched
+
+
+def test_untrack_unknown_raises():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _paths_in(Path(tmp))
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        raised = False
+        try:
+            hs.untrack_skill(p, "ghost")
+        except KeyError:
+            raised = True
+        assert raised
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
