@@ -242,6 +242,27 @@ def apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
     return changes
 
 
+def prune_all(paths: Paths, dry_run: bool = False) -> list[str]:
+    man = load_manifest(paths.manifest)
+    changes: list[str] = []
+    for name, cfg in sorted(man["skills"].items()):
+        targets = cfg.get("targets", [])
+        if "ignore" in targets:
+            continue
+        for h, skills_dir in paths.harness_skills.items():
+            if h in targets:
+                continue
+            dst = skills_dir / name
+            if not dst.is_dir():
+                continue
+            changes.append(f"{name} -x {h}")
+            if dry_run:
+                continue
+            backup_skill(paths, h, name, dst)
+            shutil.rmtree(dst)
+    return changes
+
+
 def cmd_status(paths: Paths) -> None:
     names = list(paths.harness_skills)
     rows = compute_states(paths)

@@ -431,6 +431,55 @@ def test_untrack_unknown_raises():
         assert raised
 
 
+def test_prune_removes_detargeted_with_backup():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "v1"})
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "old"})
+        _make_skill(p.harness_skills["codex"], "alpha", {"SKILL.md": "v1"})
+        # alpha targeted only to codex -> claude copy is de-targeted
+        hs.save_manifest(p.manifest, {"skills": {"alpha": {"targets": ["codex"]}}})
+
+        changes = hs.prune_all(p)
+
+        assert changes == ["alpha -x claude"]
+        assert not (p.harness_skills["claude"] / "alpha").exists()
+        assert (p.harness_skills["codex"] / "alpha").exists()              # targeted stays
+        backups = list(p.backups.rglob("claude/alpha/SKILL.md"))
+        assert backups and backups[0].read_text() == "old"
+
+
+def test_prune_spares_ignore_and_foreign():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "kept", {"SKILL.md": "k"})
+        _make_skill(p.harness_skills["claude"], "kept", {"SKILL.md": "k"})
+        _make_skill(p.harness_skills["claude"], "foreign", {"SKILL.md": "f"})
+        hs.save_manifest(p.manifest, {"skills": {"kept": {"targets": ["ignore"]}}})
+
+        changes = hs.prune_all(p)
+
+        assert changes == []
+        assert (p.harness_skills["claude"] / "kept").exists()      # ignore -> untouched
+        assert (p.harness_skills["claude"] / "foreign").exists()   # unmanifested -> untouched
+
+
+def test_prune_dry_run_deletes_nothing():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "v1"})
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "v1"})
+        hs.save_manifest(p.manifest, {"skills": {"alpha": {"targets": ["codex"]}}})
+
+        changes = hs.prune_all(p, dry_run=True)
+
+        assert changes == ["alpha -x claude"]
+        assert (p.harness_skills["claude"] / "alpha").exists()
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
