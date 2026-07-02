@@ -151,23 +151,26 @@ class HarnessSyncApp(App):
         table = self.query_one("#status-table", DataTable)
         table.clear(columns=True)
         names = list(self.paths.harness_skills)
-        table.add_columns("SKILL", "REPO", *[n.upper() for n in names])
-        rows = hs.compute_states(self.paths)
+        table.add_columns("ASSET", "REPO", *[n.upper() for n in names])
         counts = {"synced": 0, "drift": 0, "untracked": 0}
-        for row in rows:
-            states = {row[h] for h in names}
-            if "drift" in states:
-                counts["drift"] += 1
-            elif "untracked" in states:
-                counts["untracked"] += 1
-            elif "synced" in states:
-                counts["synced"] += 1
-            cells = [row["name"], "yes" if row["repo"] else "no"]
-            for h in names:
-                state = row[h]
-                cells.append(Text(state, style=STATE_STYLE.get(state, "")))
-            table.add_row(*cells)
-        summary = Text(f"{len(rows)} skills · ")
+        total = 0
+        for kind in hs.KINDS:
+            for row in hs.compute_states(self.paths, kind):
+                total += 1
+                states = {row[h] for h in names}
+                if "drift" in states:
+                    counts["drift"] += 1
+                elif "untracked" in states:
+                    counts["untracked"] += 1
+                elif "synced" in states:
+                    counts["synced"] += 1
+                cells = [hs.format_asset_name(kind, row["name"]),
+                         "yes" if row["repo"] else "no"]
+                for h in names:
+                    state = row[h]
+                    cells.append(Text(state, style=STATE_STYLE.get(state, "")))
+                table.add_row(*cells)
+        summary = Text(f"{total} assets · ")
         summary.append(f"{counts['synced']} synced", style=STATE_STYLE["synced"])
         summary.append(" · ")
         summary.append(f"{counts['drift']} drift", style=STATE_STYLE["drift"])
@@ -180,13 +183,15 @@ class HarnessSyncApp(App):
         skills = self.query_one("#adopt-skills", SelectionList)
         skills.clear_options()
         self._adoptable: dict[str, list[str]] = {}
-        for row in hs.compute_states(self.paths):
-            available = [h for h in names if row[h] in ("untracked", "drift")]
-            if not available:
-                continue
-            self._adoptable[row["name"]] = available
-            detail = ", ".join(f"{h}:{row[h]}" for h in available)
-            skills.add_option(Selection(f"{row['name']}  ({detail})", row["name"]))
+        for kind in hs.KINDS:
+            for row in hs.compute_states(self.paths, kind):
+                available = [h for h in names if row[h] in ("untracked", "drift")]
+                if not available:
+                    continue
+                label = hs.format_asset_name(kind, row["name"])
+                self._adoptable[label] = available
+                detail = ", ".join(f"{h}:{row[h]}" for h in available)
+                skills.add_option(Selection(f"{label}  ({detail})", label))
         self._fill_targets("#adopt-targets", names)
         source = self.query_one("#adopt-source", Select)
         source.set_options([("auto (first available)", "auto")] + [(h, h) for h in names])
@@ -224,11 +229,12 @@ class HarnessSyncApp(App):
             return
         targets = self._batch_targets(raw_targets)
         source_pref = self.query_one("#adopt-source", Select).value
-        for name in chosen:
-            available = self._adoptable[name]
+        for label in chosen:
+            kind, name = hs.parse_asset_name(label)
+            available = self._adoptable[label]
             source = source_pref if source_pref in available else available[0]
-            hs.adopt_skill(self.paths, name, source, targets)
-            self._log(f"adopted {name} from {source} -> {targets}")
+            hs.adopt_skill(self.paths, name, source, targets, kind)
+            self._log(f"adopted {label} from {source} -> {targets}")
         self.action_refresh()
 
     @on(Button.Pressed, "#plugins-btn")
@@ -333,13 +339,14 @@ class HarnessSyncApp(App):
         table = self.query_one("#status-table", DataTable)
         if table.row_count == 0:
             return
-        name = str(table.get_row_at(table.cursor_row)[0])
+        label = str(table.get_row_at(table.cursor_row)[0])
+        kind, name = hs.parse_asset_name(label)
         try:
-            hs.untrack_skill(self.paths, name)
+            hs.untrack_skill(self.paths, name, kind)
         except KeyError:
-            self._log(f"untrack: '{name}' is not tracked")
+            self._log(f"untrack: '{label}' is not tracked")
             return
-        self._log(f"untracked {name} (repo copy backed up; harnesses untouched)")
+        self._log(f"untracked {label} (repo copy backed up; harnesses untouched)")
         self.action_refresh()
 
     @on(Button.Pressed, "#harness-add-btn")

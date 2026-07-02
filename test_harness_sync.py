@@ -825,6 +825,168 @@ def test_refresh_skill_untracked_raises():
         assert raised
 
 
+def test_parse_and_format_asset_name():
+    assert hs.parse_asset_name("branch-pr") == ("skills", "branch-pr")
+    assert hs.parse_asset_name("agents:sdd-apply.md") == ("agents", "sdd-apply.md")
+    assert hs.format_asset_name("skills", "x") == "x"
+    assert hs.format_asset_name("agents", "y.md") == "agents:y.md"
+
+
+def test_scan_kind_files_and_hash_copy_file():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / "agents"
+        root.mkdir()
+        (root / "one.md").write_text("A")
+        (root / "two.md").write_text("B")
+        (root / "notes.txt").write_text("ignored")
+        result = hs.scan_kind(root, "agents")
+        assert set(result) == {"one.md", "two.md"}
+        assert hs.skill_hash(root / "one.md") != hs.skill_hash(root / "two.md")
+        dst = Path(t) / "out" / "one.md"
+        hs.copy_skill(root / "one.md", dst)
+        assert dst.read_text() == "A"
+        assert hs.scan_kind(Path(t) / "missing", "skills") == {}
+
+
+def test_harness_kind_dir_claude_only():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _paths_in(Path(tmp))  # claude:claude, codex:codex
+        assert hs.harness_kind_dir(p, "claude", "agents") is not None
+        assert hs.harness_kind_dir(p, "codex", "agents") is None      # claude_only
+        assert hs.harness_kind_dir(p, "codex", "skills") is not None  # skills everywhere
+
+
+def _agent_paths(t: Path) -> "hs.Paths":
+    return hs.Paths(
+        repo_skills=t / "repo" / "skills",
+        manifest=t / "repo" / "manifest.json",
+        backups=t / "repo" / ".backups",
+        registry=t / "repo" / "harnesses.json",
+        harness_skills={"claude": t / "cc" / "skills",
+                        "claude-perso": t / "cp" / "skills",
+                        "codex": t / "cx" / "skills"},
+        harness_types={"claude": "claude", "claude-perso": "claude", "codex": "codex"},
+    )
+
+
+def test_agent_states_adopt_apply_roundtrip():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _agent_paths(t)
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        agents = t / "cc" / "agents"
+        agents.mkdir(parents=True)
+        (agents / "bot.md").write_text("agent body")
+
+        rows = {r["name"]: r for r in hs.compute_states(p, kind="agents")}
+        assert rows["bot.md"]["claude"] == "untracked"
+        assert rows["bot.md"]["codex"] == "absent"          # claude_only
+
+        hs.adopt_skill(p, "bot.md", "claude", ["claude", "claude-perso"], kind="agents")
+        assert (t / "repo" / "agents" / "bot.md").read_text() == "agent body"
+        assert hs.load_manifest(p.manifest)["agents"]["bot.md"] == {
+            "targets": ["claude", "claude-perso"]}
+
+        changes = hs.apply_all(p)
+        assert "agents:bot.md -> claude-perso" in changes
+        assert (t / "cp" / "agents" / "bot.md").read_text() == "agent body"
+        assert hs.apply_all(p) == []                        # idempotent
+
+
+def test_agent_apply_skips_codex_target_with_warning():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _agent_paths(t)
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        (t / "repo" / "agents").mkdir(parents=True)
+        (t / "repo" / "agents" / "bot.md").write_text("x")
+        hs.save_manifest(p.manifest, {"skills": {}, "agents": {
+            "bot.md": {"targets": ["codex"]}}})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = hs.apply_all(p)
+        assert changes == []
+        assert "codex" in err.getvalue()
+        assert not (t / "cx" / "agents").exists()
+
+
+def test_agent_untrack_refresh_prune():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _agent_paths(t)
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        agents_cc = t / "cc" / "agents"
+        agents_cc.mkdir(parents=True)
+        (agents_cc / "bot.md").write_text("v1")
+        hs.adopt_skill(p, "bot.md", "claude", ["claude"], kind="agents")
+
+        (agents_cc / "bot.md").write_text("v2")
+        hs.refresh_skill(p, "bot.md", "claude", kind="agents")
+        assert (t / "repo" / "agents" / "bot.md").read_text() == "v2"
+
+        agents_cp = t / "cp" / "agents"
+        agents_cp.mkdir(parents=True)
+        (agents_cp / "bot.md").write_text("stray")
+        changes = hs.prune_all(p)
+        assert changes == ["agents:bot.md -x claude-perso"]
+        assert not (agents_cp / "bot.md").exists()
+
+        hs.untrack_skill(p, "bot.md", kind="agents")
+        assert "bot.md" not in hs.load_manifest(p.manifest).get("agents", {})
+        assert not (t / "repo" / "agents" / "bot.md").exists()
+        assert (agents_cc / "bot.md").exists()
+
+
+def test_tui_asset_kinds_in_status_and_adopt():
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return
+    import asyncio
+    from textual.widgets import DataTable, SelectionList
+    from harness_tui import HarnessSyncApp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        repo = t / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "claude": {"base": str(t / "cc")},
+            "claude-perso": {"base": str(t / "cp")},
+            "codex": {"base": str(t / "cx")}}}))
+        agents = t / "cc" / "agents"
+        agents.mkdir(parents=True)
+        (agents / "bot.md").write_text("agent")
+
+        async def go():
+            app = HarnessSyncApp(repo)
+            async with app.run_test(size=(130, 42)) as pilot:
+                await pilot.pause()
+                table = app.query_one("#status-table", DataTable)
+                labels = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+                assert "agents:bot.md" in labels
+                adopt = app.query_one("#adopt-skills", SelectionList)
+                values = [adopt.get_option_at_index(i).value
+                          for i in range(adopt.option_count)]
+                assert "agents:bot.md" in values
+                # adopt it to claude-perso via the handler
+                for i in range(adopt.option_count):
+                    opt = adopt.get_option_at_index(i)
+                    if opt.value == "agents:bot.md":
+                        adopt.select(opt)
+                targets = app.query_one("#adopt-targets", SelectionList)
+                for i in range(targets.option_count):
+                    opt = targets.get_option_at_index(i)
+                    if opt.value == "claude-perso":
+                        targets.select(opt)
+                app.adopt_selected()
+                await pilot.pause()
+                man = hs.load_manifest(repo / "manifest.json")
+                assert man["agents"]["bot.md"]["targets"] == ["claude-perso"]
+
+        asyncio.run(go())
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
