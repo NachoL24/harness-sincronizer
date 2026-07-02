@@ -825,6 +825,37 @@ def test_refresh_skill_untracked_raises():
         assert raised
 
 
+def test_parse_and_format_asset_name():
+    assert hs.parse_asset_name("branch-pr") == ("skills", "branch-pr")
+    assert hs.parse_asset_name("agents:sdd-apply.md") == ("agents", "sdd-apply.md")
+    assert hs.format_asset_name("skills", "x") == "x"
+    assert hs.format_asset_name("agents", "y.md") == "agents:y.md"
+
+
+def test_scan_kind_files_and_hash_copy_file():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / "agents"
+        root.mkdir()
+        (root / "one.md").write_text("A")
+        (root / "two.md").write_text("B")
+        (root / "notes.txt").write_text("ignored")
+        result = hs.scan_kind(root, "agents")
+        assert set(result) == {"one.md", "two.md"}
+        assert hs.skill_hash(root / "one.md") != hs.skill_hash(root / "two.md")
+        dst = Path(t) / "out" / "one.md"
+        hs.copy_skill(root / "one.md", dst)
+        assert dst.read_text() == "A"
+        assert hs.scan_kind(Path(t) / "missing", "skills") == {}
+
+
+def test_harness_kind_dir_claude_only():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _paths_in(Path(tmp))  # claude:claude, codex:codex
+        assert hs.harness_kind_dir(p, "claude", "agents") is not None
+        assert hs.harness_kind_dir(p, "codex", "agents") is None      # claude_only
+        assert hs.harness_kind_dir(p, "codex", "skills") is not None  # skills everywhere
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

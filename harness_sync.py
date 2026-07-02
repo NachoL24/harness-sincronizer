@@ -67,7 +67,28 @@ def resolve_paths(repo_root: Path) -> Paths:
     )
 
 
+KINDS = {
+    "skills": {"asset": "dir", "claude_only": False},
+    "agents": {"asset": "file", "claude_only": True},
+    "commands": {"asset": "file", "claude_only": True},
+}
+
+
+def parse_asset_name(s: str) -> tuple[str, str]:
+    if ":" in s:
+        kind, _, name = s.partition(":")
+        if kind in KINDS:
+            return kind, name
+    return "skills", s
+
+
+def format_asset_name(kind: str, name: str) -> str:
+    return name if kind == "skills" else f"{kind}:{name}"
+
+
 def skill_hash(skill_dir: Path) -> str:
+    if skill_dir.is_file():
+        return hashlib.sha256(skill_dir.read_bytes()).hexdigest()
     h = hashlib.sha256()
     for f in sorted(p for p in skill_dir.rglob("*") if p.is_file()):
         h.update(f.relative_to(skill_dir).as_posix().encode())
@@ -85,6 +106,24 @@ def scan(skills_dir: Path) -> dict[str, str]:
         for d in sorted(skills_dir.iterdir())
         if d.is_dir() and not d.name.startswith(".") and (d / "SKILL.md").exists()
     }
+
+
+def scan_kind(root: Path, kind: str) -> dict[str, str]:
+    if KINDS[kind]["asset"] == "dir":
+        return scan(root)
+    if not root.is_dir():
+        return {}
+    return {f.name: skill_hash(f) for f in sorted(root.glob("*.md")) if f.is_file()}
+
+
+def harness_kind_dir(paths: Paths, harness: str, kind: str) -> Path | None:
+    if KINDS[kind]["claude_only"] and paths.harness_types[harness] == "codex":
+        return None
+    return paths.harness_skills[harness].parent / kind
+
+
+def repo_kind_dir(paths: Paths, kind: str) -> Path:
+    return paths.repo_skills.parent / kind
 
 
 def read_installed_plugins(plugins_dir: Path) -> list[tuple[str, Path]]:
@@ -273,16 +312,24 @@ def compute_states(paths: Paths) -> list[dict]:
 
 
 def copy_skill(src: Path, dst: Path) -> None:
-    if dst.exists():
+    if dst.is_dir():
         shutil.rmtree(dst)
+    elif dst.exists():
+        dst.unlink()
     dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, dst)
+    if src.is_file():
+        shutil.copy2(src, dst)
+    else:
+        shutil.copytree(src, dst)
 
 
 def backup_skill(paths: Paths, label: str, name: str, src: Path) -> None:
     backup = paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S") / label / name
     backup.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, backup)
+    if src.is_file():
+        shutil.copy2(src, backup)
+    else:
+        shutil.copytree(src, backup)
 
 
 def import_skill(paths: Paths, name: str, src_dir: Path, targets: list[str]) -> None:
