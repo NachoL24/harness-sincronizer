@@ -579,6 +579,47 @@ def test_harness_add_with_type():
         assert data["harnesses"]["cx2"] == {"base": "~/cx2", "type": "codex"}
 
 
+def _tomllib_available() -> bool:
+    try:
+        import tomllib  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def test_mcp_config_path_rules():
+    with tempfile.TemporaryDirectory() as t:
+        base = Path(t) / "cx"
+        assert hs.mcp_config_path(base, "codex") == base / "config.toml"
+        cbase = Path(t) / "cc"
+        cbase.mkdir()
+        (cbase / ".claude.json").write_text("{}")
+        assert hs.mcp_config_path(cbase, "claude") == cbase / ".claude.json"
+        home_claude = Path.home() / ".claude"
+        if not (home_claude / ".claude.json").exists() and (Path.home() / ".claude.json").exists():
+            assert hs.mcp_config_path(home_claude, "claude") == Path.home() / ".claude.json"
+
+
+def test_read_mcp_servers_json_and_missing():
+    with tempfile.TemporaryDirectory() as t:
+        f = Path(t) / ".claude.json"
+        assert hs.read_mcp_servers(f, "claude") == {}
+        f.write_text(json.dumps({"other": 1, "mcpServers": {
+            "srv": {"command": "x", "args": ["a"], "env": {"K": "v"}}}}))
+        servers = hs.read_mcp_servers(f, "claude")
+        assert servers["srv"]["command"] == "x"
+
+
+def test_read_mcp_servers_toml():
+    if not _tomllib_available():
+        return
+    with tempfile.TemporaryDirectory() as t:
+        f = Path(t) / "config.toml"
+        f.write_text('model = "gpt"\n\n[mcp_servers.srv]\ncommand = "x"\nargs = ["a"]\n\n[mcp_servers.srv.env]\nK = "v"\n')
+        servers = hs.read_mcp_servers(f, "codex")
+        assert servers == {"srv": {"command": "x", "args": ["a"], "env": {"K": "v"}}}
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

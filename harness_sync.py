@@ -155,6 +155,35 @@ def harness_add(paths: Paths, name: str, base: str, type: str | None = None) -> 
     save_registry(paths.registry, data)
 
 
+def _require_tomllib():
+    try:
+        import tomllib
+        return tomllib
+    except ImportError:
+        raise RuntimeError(
+            "MCP sync requires Python 3.11+ (tomllib) — run with python3.11 or newer")
+
+
+def mcp_config_path(base: Path, htype: str) -> Path:
+    if htype == "codex":
+        return base / "config.toml"
+    p = base / ".claude.json"
+    if p.exists():
+        return p
+    if base == Path.home() / ".claude":
+        return Path.home() / ".claude.json"
+    return p
+
+
+def read_mcp_servers(path: Path, htype: str) -> dict[str, dict]:
+    if not path.exists():
+        return {}
+    if htype == "codex":
+        tomllib = _require_tomllib()
+        return tomllib.loads(path.read_text()).get("mcp_servers", {})
+    return json.loads(path.read_text()).get("mcpServers", {})
+
+
 def harness_remove(paths: Paths, name: str) -> None:
     data = load_registry(paths.registry)
     data["harnesses"].pop(name, None)
