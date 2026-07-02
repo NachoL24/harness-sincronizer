@@ -125,6 +125,21 @@ python3 harness_sync.py refresh commands:sdd-ff.md claude
 Skills stay unprefixed. The manifest gains additive `"agents"` / `"commands"`
 sections with the same `{"targets": [...]}` schema.
 
+## Instruction files
+
+The global instruction file syncs across harness types as ONE logical asset,
+`instructions:global.md`: Claude-type harnesses read/write `<base>/CLAUDE.md`,
+Codex-type `<base>/AGENTS.md`. Plain verbatim copy — adopt from the harness
+whose version is canonical, target the rest:
+
+```bash
+python3 harness_sync.py adopt                       # includes instructions:global.md
+python3 harness_sync.py refresh instructions:global.md claude
+```
+
+Careful: applying overwrites the target file (backed up first). Nothing syncs
+until you adopt it explicitly.
+
 ## MCP servers
 
 MCP servers are portable across harnesses — only the config **format** differs:

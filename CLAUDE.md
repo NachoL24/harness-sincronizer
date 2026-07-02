@@ -22,7 +22,9 @@ repo. Each user builds their own canonical store via `adopt`.
 - **Asset kinds**: the engine syncs kinds — `skills` (dirs), `agents` and
   `commands` (single `.md` files, Claude-type harnesses only). Kind name ==
   subdir in repo and harness base. Assets are addressed `kind:name`; skills
-  unprefixed. Manifest has one section per kind (plus `mcp`).
+  unprefixed. Manifest has one section per kind (plus `mcp`). The
+  `instructions` kind is fixed-name: one logical asset `global.md` mapping to
+  `<base>/CLAUDE.md` (claude-type) / `<base>/AGENTS.md` (codex-type).
 - **Skill detection**: a skill is a non-hidden directory containing `SKILL.md`;
   dot-dirs (e.g. `.system`) and support dirs without `SKILL.md` are ignored.
 - **State** is derived by comparing a content hash of each skill directory
@@ -109,8 +111,7 @@ Follow TDD: write the failing test first, then the minimal implementation.
 
 ## Non-goals (v1)
 
-Instruction-file sync (`CLAUDE.md`↔`AGENTS.md`) and two-way auto propagation.
-These are meant to layer onto the same base later. (MCP sync and
-untrack/pruning shipped after v1.)
+Two-way auto propagation with conflict resolution. (MCP sync, untrack/pruning,
+asset kinds — agents/commands — and instruction-file sync shipped after v1.)
 
 Design and plan live under `docs/superpowers/`.
