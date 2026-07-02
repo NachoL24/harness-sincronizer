@@ -184,6 +184,61 @@ def read_mcp_servers(path: Path, htype: str) -> dict[str, dict]:
     return json.loads(path.read_text()).get("mcpServers", {})
 
 
+def _toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, str):
+        return json.dumps(v)  # JSON escaping is valid for TOML basic strings
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    raise ValueError(f"unsupported TOML value: {v!r}")
+
+
+def _toml_server_block(name: str, cfg: dict) -> str:
+    lines = [f"[mcp_servers.{name}]"]
+    subtables = {}
+    for k, v in cfg.items():
+        if isinstance(v, dict):
+            subtables[k] = v
+            continue
+        lines.append(f"{k} = {_toml_value(v)}")
+    for k, sub in subtables.items():
+        lines.append(f"\n[mcp_servers.{name}.{k}]")
+        for kk, vv in sub.items():
+            lines.append(f"{kk} = {_toml_value(vv)}")
+    return "\n".join(lines) + "\n"
+
+
+def _strip_mcp_blocks(text: str, names: set[str]) -> str:
+    out, skip = [], False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            header = stripped[1:-1]
+            if header.startswith("mcp_servers."):
+                skip = header.split(".")[1] in names
+            else:
+                skip = False
+        if not skip:
+            out.append(line)
+    return "".join(out)
+
+
+def write_mcp_servers(path: Path, htype: str, servers: dict[str, dict]) -> None:
+    if htype == "codex":
+        _require_tomllib()  # version gate before touching anything
+        text = path.read_text() if path.exists() else ""
+        text = _strip_mcp_blocks(text, set(servers)).rstrip("\n")
+        blocks = "\n".join(_toml_server_block(n, c) for n, c in sorted(servers.items()))
+        path.write_text((text + "\n\n" if text else "") + blocks)
+    else:
+        data = json.loads(path.read_text()) if path.exists() else {}
+        data.setdefault("mcpServers", {}).update(servers)
+        path.write_text(json.dumps(data, indent=2) + "\n")
+
+
 def harness_remove(paths: Paths, name: str) -> None:
     data = load_registry(paths.registry)
     data["harnesses"].pop(name, None)

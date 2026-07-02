@@ -620,6 +620,43 @@ def test_read_mcp_servers_toml():
         assert servers == {"srv": {"command": "x", "args": ["a"], "env": {"K": "v"}}}
 
 
+def test_write_mcp_servers_json_preserves_other_keys():
+    with tempfile.TemporaryDirectory() as t:
+        f = Path(t) / ".claude.json"
+        f.write_text(json.dumps({"theme": "dark", "mcpServers": {
+            "keep": {"command": "k"}, "old": {"command": "v1"}}}))
+        hs.write_mcp_servers(f, "claude", {"old": {"command": "v2"}, "new": {"command": "n"}})
+        data = json.loads(f.read_text())
+        assert data["theme"] == "dark"                       # unrelated key preserved
+        assert data["mcpServers"]["keep"] == {"command": "k"}  # unmanaged preserved
+        assert data["mcpServers"]["old"] == {"command": "v2"}  # updated
+        assert data["mcpServers"]["new"] == {"command": "n"}   # added
+
+
+def test_write_mcp_servers_toml_splice_preserves_bytes():
+    if not _tomllib_available():
+        return
+    import tomllib
+    with tempfile.TemporaryDirectory() as t:
+        f = Path(t) / "config.toml"
+        f.write_text(
+            '# my precious comment\nmodel = "gpt"\n\n'
+            '[mcp_servers.keep]\ncommand = "k"\n\n'
+            '[mcp_servers.old]\ncommand = "v1"\n\n[mcp_servers.old.env]\nA = "1"\n'
+        )
+        hs.write_mcp_servers(f, "codex", {
+            "old": {"command": "v2", "args": ["x"], "env": {"B": "2"}},
+            "new": {"command": "n"},
+        })
+        text = f.read_text()
+        assert "# my precious comment" in text               # comments preserved
+        assert 'model = "gpt"' in text
+        data = tomllib.loads(text)
+        assert data["mcp_servers"]["keep"] == {"command": "k"}       # unmanaged intact
+        assert data["mcp_servers"]["old"] == {"command": "v2", "args": ["x"], "env": {"B": "2"}}
+        assert data["mcp_servers"]["new"] == {"command": "n"}
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
