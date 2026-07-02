@@ -370,6 +370,75 @@ def prune_all(paths: Paths, dry_run: bool = False) -> list[str]:
     return changes
 
 
+def _mcp_harness_servers(paths: Paths) -> dict[str, dict[str, dict]]:
+    result: dict[str, dict[str, dict]] = {}
+    for h, skills_dir in paths.harness_skills.items():
+        htype = paths.harness_types[h]
+        result[h] = read_mcp_servers(mcp_config_path(skills_dir.parent, htype), htype)
+    return result
+
+
+def mcp_states(paths: Paths) -> list[dict]:
+    man = load_manifest(paths.manifest).get("mcp", {})
+    harness = _mcp_harness_servers(paths)
+    names = set(man) | {n for m in harness.values() for n in m}
+    rows = []
+    for name in sorted(names):
+        tracked = man.get(name)
+        row = {"name": name, "repo": tracked is not None}
+        for h in paths.harness_skills:
+            cfg = harness[h].get(name)
+            if cfg is None:
+                row[h] = "absent"
+            elif tracked is None:
+                row[h] = "untracked"
+            elif cfg == tracked["config"]:
+                row[h] = "synced"
+            else:
+                row[h] = "drift"
+        rows.append(row)
+    return rows
+
+
+def mcp_adopt_server(paths: Paths, name: str, source_harness: str, targets: list[str]) -> None:
+    htype = paths.harness_types[source_harness]
+    servers = read_mcp_servers(
+        mcp_config_path(paths.harness_skills[source_harness].parent, htype), htype)
+    man = load_manifest(paths.manifest)
+    man.setdefault("mcp", {})[name] = {"targets": list(targets), "config": servers[name]}
+    save_manifest(paths.manifest, man)
+
+
+def mcp_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
+    man = load_manifest(paths.manifest).get("mcp", {})
+    current = _mcp_harness_servers(paths)
+    pending: dict[str, dict[str, dict]] = {}
+    changes: list[str] = []
+    for name, cfg in sorted(man.items()):
+        targets = cfg.get("targets", [])
+        if "ignore" in targets:
+            continue
+        for t in targets:
+            if t not in paths.harness_skills:
+                print(f"warning: mcp server '{name}' targets unknown harness '{t}' — skipping",
+                      file=sys.stderr)
+                continue
+            if current[t].get(name) == cfg["config"]:
+                continue
+            pending.setdefault(t, {})[name] = cfg["config"]
+            changes.append(f"{name} -> {t}")
+    if not dry_run:
+        for h, servers in pending.items():
+            htype = paths.harness_types[h]
+            path = mcp_config_path(paths.harness_skills[h].parent, htype)
+            if path.exists():
+                backup = paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S") / h / "_mcp" / path.name
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, backup)
+            write_mcp_servers(path, htype, servers)
+    return changes
+
+
 def cmd_status(paths: Paths) -> None:
     names = list(paths.harness_skills)
     rows = compute_states(paths)

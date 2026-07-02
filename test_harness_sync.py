@@ -657,6 +657,69 @@ def test_write_mcp_servers_toml_splice_preserves_bytes():
         assert data["mcp_servers"]["new"] == {"command": "n"}
 
 
+def _mcp_paths(t: Path) -> "hs.Paths":
+    p = _paths_in(t)
+    (t / "cc").mkdir(parents=True, exist_ok=True)
+    (t / "cc" / ".claude.json").write_text(json.dumps({"mcpServers": {
+        "alpha": {"command": "a"}, "solo": {"command": "s"}}}))
+    (t / "cx").mkdir(parents=True, exist_ok=True)
+    (t / "cx" / "config.toml").write_text('model = "gpt"\n\n[mcp_servers.alpha]\ncommand = "OLD"\n')
+    p.manifest.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def test_mcp_states_and_adopt():
+    if not _tomllib_available():
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _mcp_paths(Path(tmp))
+        rows = {r["name"]: r for r in hs.mcp_states(p)}
+        assert rows["alpha"]["claude"] == "untracked"
+        assert rows["solo"]["codex"] == "absent"
+
+        hs.mcp_adopt_server(p, "alpha", "claude", ["claude", "codex"])
+        man = hs.load_manifest(p.manifest)
+        assert man["mcp"]["alpha"] == {"targets": ["claude", "codex"],
+                                       "config": {"command": "a"}}
+        rows = {r["name"]: r for r in hs.mcp_states(p)}
+        assert rows["alpha"]["claude"] == "synced"
+        assert rows["alpha"]["codex"] == "drift"   # codex still has OLD
+
+
+def test_mcp_apply_pushes_both_formats_idempotent():
+    if not _tomllib_available():
+        return
+    import tomllib
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _mcp_paths(t)
+        hs.mcp_adopt_server(p, "alpha", "claude", ["claude", "codex"])
+
+        changes = hs.mcp_apply_all(p)
+        assert changes == ["alpha -> codex"]                       # claude already synced
+        toml_text = (t / "cx" / "config.toml").read_text()
+        assert 'model = "gpt"' in toml_text                        # unrelated preserved
+        assert tomllib.loads(toml_text)["mcp_servers"]["alpha"] == {"command": "a"}
+        assert list(p.backups.rglob("_mcp/config.toml"))           # backup exists
+
+        assert hs.mcp_apply_all(p) == []                           # idempotent
+
+
+def test_mcp_apply_dry_run_and_unknown_target():
+    if not _tomllib_available():
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _mcp_paths(t)
+        hs.mcp_adopt_server(p, "alpha", "claude", ["ghost", "codex"])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = hs.mcp_apply_all(p, dry_run=True)
+        assert changes == ["alpha -> codex"]
+        assert "ghost" in err.getvalue()
+        assert "OLD" in (t / "cx" / "config.toml").read_text()     # dry-run wrote nothing
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
