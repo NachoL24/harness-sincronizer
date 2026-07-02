@@ -1354,6 +1354,26 @@ def test_cli_settings_list_and_apply_dry_run():
         assert "hooks" in text and "model" in text
 
 
+def test_sync_state_recorded_by_apply_refresh_adopt():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.harness_skills["claude"], "gamma", {"SKILL.md": "v1"})
+        hs.adopt_skill(p, "gamma", "claude", ["claude", "codex"])
+        st = hs.load_state(p)
+        g = hs.skill_hash(p.repo_skills / "gamma")
+        assert st["skills"]["gamma"]["claude"] == g          # adopt records source
+        hs.apply_skill(p, "gamma", ["codex"])
+        assert hs.load_state(p)["skills"]["gamma"]["codex"] == g   # apply records push
+        _make_skill(p.harness_skills["claude"], "gamma", {"SKILL.md": "v2"})
+        hs.refresh_skill(p, "gamma", "claude")
+        g2 = hs.skill_hash(p.repo_skills / "gamma")
+        assert g2 != g
+        assert hs.load_state(p)["skills"]["gamma"]["claude"] == g2  # refresh records pull
+        hs.apply_skill(p, "gamma", ["codex"], dry_run=True)
+        assert hs.load_state(p)["skills"]["gamma"]["codex"] == g    # dry-run records nothing
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

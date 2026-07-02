@@ -9,3 +9,4 @@ __pycache__/
 /manifest.json
 /harnesses.json
 /settings-files/
+/.sync-state.json

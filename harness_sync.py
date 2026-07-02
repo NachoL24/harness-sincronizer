@@ -214,6 +214,27 @@ def save_manifest(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def state_path(paths: Paths) -> Path:
+    return paths.manifest.parent / ".sync-state.json"
+
+
+def load_state(paths: Paths) -> dict:
+    p = state_path(paths)
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text())
+
+
+def save_state(paths: Paths, state: dict) -> None:
+    state_path(paths).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def record_synced(paths: Paths, kind: str, name: str, harness: str, hash_: str) -> None:
+    state = load_state(paths)
+    state.setdefault(kind, {}).setdefault(name, {})[harness] = hash_
+    save_state(paths, state)
+
+
 def load_registry(path: Path) -> dict:
     if not path.exists():
         return {"harnesses": {}}
@@ -382,6 +403,8 @@ def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str]
                 kind: str = "skills") -> None:
     src = harness_asset_path(paths, source_harness, kind, name)
     import_skill(paths, name, src, targets, kind)
+    record_synced(paths, kind, name, source_harness,
+                  skill_hash(repo_kind_dir(paths, kind) / name))
 
 
 def adopt_plugin(paths: Paths, plugin: dict, targets: list[str]) -> tuple[list[str], list[str]]:
@@ -404,6 +427,7 @@ def refresh_skill(paths: Paths, name: str, source_harness: str, kind: str = "ski
     if repo_asset.exists():
         backup_skill(paths, "repo", name, repo_asset)
     copy_skill(harness_asset_path(paths, source_harness, kind, name), repo_asset)
+    record_synced(paths, kind, name, source_harness, skill_hash(repo_asset))
 
 
 def _remove_asset(path: Path) -> None:
@@ -439,6 +463,7 @@ def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = Fal
                   file=sys.stderr)
             continue
         if dst.exists() and skill_hash(dst) == src_hash:
+            record_synced(paths, kind, name, h, src_hash)
             continue
         changes.append(f"{format_asset_name(kind, name)} -> {h}")
         if dry_run:
@@ -446,6 +471,7 @@ def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = Fal
         if dst.exists():
             backup_skill(paths, h, name, dst)
         copy_skill(src, dst)
+        record_synced(paths, kind, name, h, src_hash)
     return changes
 
 
