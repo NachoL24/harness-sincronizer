@@ -1470,6 +1470,27 @@ def test_backup_skill_same_second_no_collision():
         assert len(backups) == 2 and backups[0] != backups[1]
 
 
+def test_cli_sync_output_and_exit_code():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.harness_skills["claude"], "eps", {"SKILL.md": "v1"})
+        hs.adopt_skill(p, "eps", "claude", ["claude"])
+        _make_skill(p.repo_skills, "eps", {"SKILL.md": "r"})
+        _make_skill(p.harness_skills["claude"], "eps", {"SKILL.md": "h"})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = hs.cmd_sync(p, dry_run=True)
+        assert code == 1
+        assert "conflict eps : claude" in out.getvalue()
+        assert "resolve" in out.getvalue()               # hint printed
+        hs.resolve_conflict(p, "eps", "repo")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            assert hs.cmd_sync(p, dry_run=False) == 0
+        assert "in sync" in out.getvalue()
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

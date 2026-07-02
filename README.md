@@ -108,6 +108,34 @@ python3 harness_sync.py apply --dry-run --prune   # preview deletions ("-x" line
 Prune never touches skills with `targets: ["ignore"]` (tracked but left alone)
 nor skills absent from the manifest — foreign content is never deleted.
 
+### 4. Two-way sync (opt-in)
+
+`apply` is one-way (repo wins). When you also edit assets directly inside a
+harness, `sync` moves changes in **both** directions — and refuses to guess
+when both sides changed:
+
+```bash
+python3 harness_sync.py sync --dry-run    # plan: pulls, pushes, conflicts
+python3 harness_sync.py sync              # execute the non-conflicting part
+python3 harness_sync.py resolve <kind:name> <repo|harness>   # pick a winner
+```
+
+- A last-synced hash per asset × harness lives in `.sync-state.json`
+  (gitignored). `apply`, `refresh`, `adopt` and `sync` keep it fresh, so
+  moving to two-way later "just works".
+- Detection per asset × harness: repo-only change → **push**; harness-only
+  change → **pull** into the repo (repo copy backed up); both changed →
+  **conflict**: reported, nothing touched, exit code 1 until resolved.
+- A pull is followed by pushes to the other stale targets in the same run.
+- No baseline yet + contents differ → conflict (the first run is
+  conservative; resolve once and you're tracked from then on).
+- Deletions never propagate: a skill removed from a harness is a warning
+  (`untrack` it, or `resolve <name> repo` to restore it).
+- `resolve` makes the winner the repo canonical (a harness winner is
+  `refresh`ed in first), then pushes it to all targets with backups.
+- Scope: file-based kinds (skills, agents, commands, instructions, cosmetic).
+  Config domains (`mcp`, `plugins sync-*`, `settings`) remain one-way.
+
 ## Agents & slash commands
 
 Claude's subagents (`<base>/agents/*.md`) and slash commands
