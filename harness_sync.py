@@ -527,12 +527,13 @@ def mcp_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
 
 def cmd_status(paths: Paths) -> None:
     names = list(paths.harness_skills)
-    rows = compute_states(paths)
     w = {h: max(len(h), 10) for h in names}
-    print(f"{'SKILL':32} {'REPO':5} " + " ".join(f"{h:{w[h]}}" for h in names))
-    for r in rows:
-        cells = " ".join(f"{r[h]:{w[h]}}" for h in names)
-        print(f"{r['name']:32} {'yes' if r['repo'] else 'no':5} " + cells)
+    print(f"{'ASSET':36} {'REPO':5} " + " ".join(f"{h:{w[h]}}" for h in names))
+    for kind in KINDS:
+        for r in compute_states(paths, kind):
+            cells = " ".join(f"{r[h]:{w[h]}}" for h in names)
+            label = format_asset_name(kind, r["name"])
+            print(f"{label:36} {'yes' if r['repo'] else 'no':5} " + cells)
 
 
 def _prompt(msg: str, choices: list[str]) -> str:
@@ -557,19 +558,22 @@ def _prompt_targets(names: list[str]) -> list[str]:
 
 def cmd_adopt(paths: Paths) -> None:
     names = list(paths.harness_skills)
-    for row in compute_states(paths):
-        name = row["name"]
-        available = [h for h in names if row[h] in ("untracked", "drift")]
-        if not available:
-            continue
-        status = ", ".join(f"{h}:{row[h]}" for h in names)
-        print(f"\nSkill: {name}  ({status})")
-        if input("  adopt? [y/N]: ").strip().lower() != "y":
-            continue
-        source = available[0] if len(available) == 1 else _prompt("  source", available)
-        targets = _prompt_targets(names)
-        adopt_skill(paths, name, source, targets)
-        print(f"  adopted {name} from {source} -> {targets}")
+    for kind in KINDS:
+        eligible = [h for h in names
+                    if harness_kind_dir(paths, h, kind) is not None]
+        for row in compute_states(paths, kind):
+            name = row["name"]
+            available = [h for h in eligible if row[h] in ("untracked", "drift")]
+            if not available:
+                continue
+            status = ", ".join(f"{h}:{row[h]}" for h in eligible)
+            print(f"\nAsset: {format_asset_name(kind, name)}  ({status})")
+            if input("  adopt? [y/N]: ").strip().lower() != "y":
+                continue
+            source = available[0] if len(available) == 1 else _prompt("  source", available)
+            targets = _prompt_targets(eligible)
+            adopt_skill(paths, name, source, targets, kind)
+            print(f"  adopted {format_asset_name(kind, name)} from {source} -> {targets}")
 
 
 def cmd_apply(paths: Paths, dry_run: bool, prune: bool = False) -> None:
@@ -731,19 +735,21 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         tui_run(Path(__file__).resolve().parent)
     elif args.cmd == "untrack":
+        kind, name = parse_asset_name(args.name)
         try:
-            untrack_skill(paths, args.name)
+            untrack_skill(paths, name, kind)
         except KeyError:
             print(f"error: '{args.name}' is not tracked", file=sys.stderr)
             return 1
         print(f"untracked '{args.name}' (repo copy backed up; harnesses untouched)")
     elif args.cmd == "refresh":
-        if args.name not in load_manifest(paths.manifest)["skills"]:
+        kind, name = parse_asset_name(args.name)
+        if name not in load_manifest(paths.manifest).get(kind, {}):
             print(f"error: '{args.name}' is not tracked", file=sys.stderr)
             return 1
         source = args.source
         if source is None:
-            row = next((r for r in compute_states(paths) if r["name"] == args.name), None)
+            row = next((r for r in compute_states(paths, kind) if r["name"] == name), None)
             drifted = [h for h in paths.harness_skills if row and row[h] == "drift"]
             if len(drifted) != 1:
                 print(f"error: specify a source harness (drifted in: {drifted or 'none'})",
@@ -754,7 +760,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: unknown harness '{source}'", file=sys.stderr)
             return 1
         try:
-            refresh_skill(paths, args.name, source)
+            refresh_skill(paths, name, source, kind)
         except KeyError:
             print(f"error: '{args.name}' is not tracked", file=sys.stderr)
             return 1
