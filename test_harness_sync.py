@@ -937,6 +937,56 @@ def test_agent_untrack_refresh_prune():
         assert (agents_cc / "bot.md").exists()
 
 
+def test_tui_asset_kinds_in_status_and_adopt():
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return
+    import asyncio
+    from textual.widgets import DataTable, SelectionList
+    from harness_tui import HarnessSyncApp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        repo = t / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "claude": {"base": str(t / "cc")},
+            "claude-perso": {"base": str(t / "cp")},
+            "codex": {"base": str(t / "cx")}}}))
+        agents = t / "cc" / "agents"
+        agents.mkdir(parents=True)
+        (agents / "bot.md").write_text("agent")
+
+        async def go():
+            app = HarnessSyncApp(repo)
+            async with app.run_test(size=(130, 42)) as pilot:
+                await pilot.pause()
+                table = app.query_one("#status-table", DataTable)
+                labels = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+                assert "agents:bot.md" in labels
+                adopt = app.query_one("#adopt-skills", SelectionList)
+                values = [adopt.get_option_at_index(i).value
+                          for i in range(adopt.option_count)]
+                assert "agents:bot.md" in values
+                # adopt it to claude-perso via the handler
+                for i in range(adopt.option_count):
+                    opt = adopt.get_option_at_index(i)
+                    if opt.value == "agents:bot.md":
+                        adopt.select(opt)
+                targets = app.query_one("#adopt-targets", SelectionList)
+                for i in range(targets.option_count):
+                    opt = targets.get_option_at_index(i)
+                    if opt.value == "claude-perso":
+                        targets.select(opt)
+                app.adopt_selected()
+                await pilot.pause()
+                man = hs.load_manifest(repo / "manifest.json")
+                assert man["agents"]["bot.md"]["targets"] == ["claude-perso"]
+
+        asyncio.run(go())
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
