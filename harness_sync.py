@@ -80,7 +80,11 @@ def skill_hash(skill_dir: Path) -> str:
 def scan(skills_dir: Path) -> dict[str, str]:
     if not skills_dir.is_dir():
         return {}
-    return {d.name: skill_hash(d) for d in sorted(skills_dir.iterdir()) if d.is_dir()}
+    return {
+        d.name: skill_hash(d)
+        for d in sorted(skills_dir.iterdir())
+        if d.is_dir() and not d.name.startswith(".") and (d / "SKILL.md").exists()
+    }
 
 
 def read_installed_plugins(plugins_dir: Path) -> list[tuple[str, Path]]:
@@ -302,6 +306,16 @@ def adopt_plugin(paths: Paths, plugin: dict, targets: list[str]) -> tuple[list[s
         import_skill(paths, name, src, targets)
         adopted.append(name)
     return adopted, skipped
+
+
+def refresh_skill(paths: Paths, name: str, source_harness: str) -> None:
+    man = load_manifest(paths.manifest)
+    if name not in man["skills"]:
+        raise KeyError(name)
+    repo_dir = paths.repo_skills / name
+    if repo_dir.is_dir():
+        backup_skill(paths, "repo", name, repo_dir)
+    copy_skill(paths.harness_skills[source_harness] / name, repo_dir)
 
 
 def untrack_skill(paths: Paths, name: str) -> None:
@@ -597,6 +611,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("tui", help="launch the full-screen dashboard (requires textual)")
     up = sub.add_parser("untrack", help="stop managing a skill (repo copy backed up; harnesses untouched)")
     up.add_argument("name")
+    rp = sub.add_parser("refresh", help="re-import a tracked skill's content from a harness")
+    rp.add_argument("name")
+    rp.add_argument("source", nargs="?", default=None,
+                    help="source harness (default: the only drifted one)")
     mp = sub.add_parser("mcp", help="sync MCP server definitions between harnesses")
     msub = mp.add_subparsers(dest="maction", required=True)
     msub.add_parser("list", help="show MCP server states across harnesses")
@@ -647,6 +665,28 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: '{args.name}' is not tracked", file=sys.stderr)
             return 1
         print(f"untracked '{args.name}' (repo copy backed up; harnesses untouched)")
+    elif args.cmd == "refresh":
+        if args.name not in load_manifest(paths.manifest)["skills"]:
+            print(f"error: '{args.name}' is not tracked", file=sys.stderr)
+            return 1
+        source = args.source
+        if source is None:
+            row = next((r for r in compute_states(paths) if r["name"] == args.name), None)
+            drifted = [h for h in paths.harness_skills if row and row[h] == "drift"]
+            if len(drifted) != 1:
+                print(f"error: specify a source harness (drifted in: {drifted or 'none'})",
+                      file=sys.stderr)
+                return 1
+            source = drifted[0]
+        if source not in paths.harness_skills:
+            print(f"error: unknown harness '{source}'", file=sys.stderr)
+            return 1
+        try:
+            refresh_skill(paths, args.name, source)
+        except KeyError:
+            print(f"error: '{args.name}' is not tracked", file=sys.stderr)
+            return 1
+        print(f"refreshed '{args.name}' from {source} (previous repo copy backed up)")
     elif args.cmd == "mcp":
         try:
             if args.maction == "list":

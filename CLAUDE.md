@@ -19,6 +19,8 @@ repo. Each user builds their own canonical store via `adopt`.
 - **Pure, path-injected functions** do the work (hashing, scanning, manifest
   I/O, adopt, apply). A thin `argparse` CLI wraps them. This keeps everything
   unit-testable without touching the real `~/.claude` / `~/.codex` dirs.
+- **Skill detection**: a skill is a non-hidden directory containing `SKILL.md`;
+  dot-dirs (e.g. `.system`) and support dirs without `SKILL.md` are ignored.
 - **State** is derived by comparing a content hash of each skill directory
   across three locations: the repo, Claude, and Codex. States: `synced`,
   `drift`, `untracked`, `absent`.
@@ -38,6 +40,9 @@ repo. Each user builds their own canonical store via `adopt`.
   manifest skills to their target harnesses. Idempotent. `--prune` also deletes
   tracked skills from harnesses they are de-targeted from (backup first;
   `ignore`/foreign skills always spared).
+- `python3 harness_sync.py refresh <name> [source]` — re-import a tracked,
+  drifted skill's content from a harness into the repo (previous repo copy
+  backed up; manifest untouched). Source defaults to the only drifted harness.
 - `python3 harness_sync.py untrack <name>` — stop managing a skill: manifest
   entry and repo copy removed (repo copy backed up); harness copies untouched.
   Core: `untrack_skill()` (raises `KeyError` if untracked).

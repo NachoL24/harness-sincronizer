@@ -94,6 +94,8 @@ python3 harness_sync.py apply             # actually sync
 Two explicit, always-backed-up exits from management:
 
 ```bash
+python3 harness_sync.py refresh <name>       # re-import a drifted tracked skill
+                                             # from its harness (repo copy backed up)
 python3 harness_sync.py untrack <name>       # forget a skill: manifest entry +
                                              # repo copy removed (backed up);
                                              # harness copies untouched

@@ -783,6 +783,48 @@ def test_tui_mcp_tab_adopt():
         asyncio.run(go())
 
 
+def test_scan_filters_dotdirs_and_non_skills():
+    with tempfile.TemporaryDirectory() as t:
+        base = Path(t)
+        _make_skill(base, "real", {"SKILL.md": "r"})
+        _make_skill(base, "_shared", {"SKILL.md": "s"})       # has SKILL.md -> kept
+        (base / ".system" / "sub").mkdir(parents=True)        # dot-dir -> filtered
+        (base / "not-a-skill").mkdir()                        # no SKILL.md -> filtered
+        (base / "not-a-skill" / "readme.md").write_text("x")
+        assert set(hs.scan(base)) == {"real", "_shared"}
+
+
+def test_refresh_skill_updates_repo_with_backup():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "old"})
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "NEW"})
+        hs.save_manifest(p.manifest, {"skills": {"alpha": {"targets": ["claude"]}}})
+
+        hs.refresh_skill(p, "alpha", "claude")
+
+        assert (p.repo_skills / "alpha" / "SKILL.md").read_text() == "NEW"
+        backups = list(p.backups.rglob("repo/alpha/SKILL.md"))
+        assert backups and backups[0].read_text() == "old"
+        # manifest untouched
+        assert hs.load_manifest(p.manifest)["skills"]["alpha"] == {"targets": ["claude"]}
+
+
+def test_refresh_skill_untracked_raises():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        _make_skill(p.harness_skills["claude"], "ghost", {"SKILL.md": "x"})
+        raised = False
+        try:
+            hs.refresh_skill(p, "ghost", "claude")
+        except KeyError:
+            raised = True
+        assert raised
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
