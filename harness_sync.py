@@ -643,6 +643,11 @@ def plugin_sync_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
             if not need_flag and not need_mkt:
                 continue
             changes.append(f"plugin:{key} -> {t}")
+            if (cfg.get("marketplace") is None
+                    and mname not in _known_marketplaces(paths, t)):
+                print(f"warning: plugin '{key}' has no marketplace source and "
+                      f"'{mname}' is unknown to '{t}' — enabling anyway",
+                      file=sys.stderr)
             if dry_run:
                 continue
             if need_flag:
@@ -759,6 +764,55 @@ def cmd_plugins_adopt(paths: Paths) -> None:
         print(msg)
 
 
+def cmd_plugin_sync_list(paths: Paths) -> None:
+    names = _claude_harnesses(paths)
+    rows = plugin_sync_states(paths)
+    if not rows:
+        print("no plugins found")
+        return
+    w = {h: max(len(h), 11) for h in names}
+    print(f"{'PLUGIN':40} {'REPO':5} " + " ".join(f"{h:{w[h]}}" for h in names))
+    starred = False
+    for r in rows:
+        cells = []
+        for h in names:
+            cell = r[h]
+            if cell in ("synced", "untracked") and not r["installed"][h]:
+                cell += "*"
+                starred = True
+            cells.append(f"{cell:{w[h]}}")
+        print(f"{r['name']:40} {'yes' if r['repo'] else 'no':5} " + " ".join(cells))
+    if starred:
+        print("* enabled but not yet installed — launch that account to finish")
+
+
+def cmd_plugin_sync_adopt(paths: Paths) -> None:
+    names = _claude_harnesses(paths)
+    for row in plugin_sync_states(paths):
+        key = row["name"]
+        available = [h for h in names if row[h] in ("untracked", "drift")]
+        if not available:
+            continue
+        status = ", ".join(f"{h}:{row[h]}" for h in names)
+        print(f"\nPlugin: {key}  ({status})")
+        if input("  adopt? [y/N]: ").strip().lower() != "y":
+            continue
+        source = available[0] if len(available) == 1 else _prompt("  source", available)
+        targets = _prompt_targets(names)
+        plugin_sync_adopt(paths, key, source, targets)
+        print(f"  adopted {key} from {source} -> {targets}")
+
+
+def cmd_plugin_sync_apply(paths: Paths, dry_run: bool) -> None:
+    changes = plugin_sync_apply_all(paths, dry_run)
+    prefix = "[dry-run] " if dry_run else ""
+    if not changes:
+        print("nothing to do")
+        return
+    for c in changes:
+        print(f"{prefix}{c}")
+
+
 def cmd_mcp_list(paths: Paths) -> None:
     names = list(paths.harness_skills)
     rows = mcp_states(paths)
@@ -822,6 +876,10 @@ def main(argv: list[str] | None = None) -> int:
     psub = pp.add_subparsers(dest="paction", required=True)
     psub.add_parser("list", help="list discovered plugin skills")
     psub.add_parser("adopt", help="interactively adopt whole plugins into the repo")
+    psub.add_parser("sync-list", help="show plugin install states across Claude accounts")
+    psub.add_parser("sync-adopt", help="interactively track plugin installs in the manifest")
+    psa = psub.add_parser("sync-apply", help="push tracked plugin installs to Claude accounts")
+    psa.add_argument("--dry-run", action="store_true")
     sub.add_parser("tui", help="launch the full-screen dashboard (requires textual)")
     up = sub.add_parser("untrack", help="stop managing a skill (repo copy backed up; harnesses untouched)")
     up.add_argument("name")
@@ -865,6 +923,12 @@ def main(argv: list[str] | None = None) -> int:
             cmd_plugins_list(paths)
         elif args.paction == "adopt":
             cmd_plugins_adopt(paths)
+        elif args.paction == "sync-list":
+            cmd_plugin_sync_list(paths)
+        elif args.paction == "sync-adopt":
+            cmd_plugin_sync_adopt(paths)
+        elif args.paction == "sync-apply":
+            cmd_plugin_sync_apply(paths, args.dry_run)
     elif args.cmd == "tui":
         try:
             from harness_tui import run as tui_run

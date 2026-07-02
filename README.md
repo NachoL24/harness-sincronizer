@@ -196,6 +196,35 @@ python3 harness_sync.py apply           # push the adopted skills to their targe
 - Adopted skills become normal `manifest.json` entries, so `apply` handles them
   like any other skill.
 
+## Whole-plugin sync (Claude ↔ Claude)
+
+Plugin *installs* themselves can be synced between Claude accounts. Instead of
+copying cache trees, `harness-sync` syncs the **declarative layer** —
+`enabledPlugins` and `extraKnownMarketplaces` in each account's
+`settings.json` — and Claude Code completes the actual install on that
+account's next launch:
+
+```bash
+python3 harness_sync.py plugins sync-list    # plugin × Claude-account state table
+python3 harness_sync.py plugins sync-adopt   # pick plugins + target accounts
+python3 harness_sync.py plugins sync-apply --dry-run
+python3 harness_sync.py plugins sync-apply
+```
+
+- Claude-type harnesses only (Codex has no plugin system); other targets are
+  warned and skipped.
+- Writes are **surgical**: only those two `settings.json` keys are touched;
+  everything else round-trips untouched, and the file is backed up first.
+- The marketplace source is captured at adopt time from the source account's
+  `plugins/known_marketplaces.json` and added to a target only if that account
+  doesn't already know the marketplace.
+- `installed_plugins.json`, the plugin cache, and marketplace clones are
+  machine-managed by Claude Code and never written. `sync-list` marks plugins
+  that are declared but not yet installed with `*` — launch that account to
+  finish.
+- No version pinning: presence + enablement sync; the auto-updater owns
+  versions.
+
 ## TUI
 
 A full-screen dashboard over the same commands, built with

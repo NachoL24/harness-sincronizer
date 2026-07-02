@@ -1193,6 +1193,37 @@ def test_plugin_sync_apply_skips_codex_unknown_and_creates_settings():
         assert cp["enabledPlugins"]["pony@mkt"] is True
 
 
+def test_plugin_sync_apply_warns_when_marketplace_source_missing():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _plugin_paths(t)
+        hs.plugin_sync_adopt(p, "ghost@nowhere", "cc", ["cp"])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = hs.plugin_sync_apply_all(p)
+        assert "plugin:ghost@nowhere -> cp" in changes
+        assert "nowhere" in err.getvalue() and "no marketplace source" in err.getvalue()
+        cp = json.loads((t / "cp" / "settings.json").read_text())
+        assert cp["enabledPlugins"]["ghost@nowhere"] is True
+        assert "nowhere" not in cp.get("extraKnownMarketplaces", {})
+
+
+def test_cli_plugin_sync_list_and_apply_dry_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _plugin_paths(Path(tmp))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            hs.cmd_plugin_sync_apply(p, dry_run=True)
+        assert "[dry-run] plugin:pony@mkt -> cp" in out.getvalue()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            hs.cmd_plugin_sync_list(p)
+        text = out.getvalue()
+        assert "pony@mkt" in text
+        assert "untracked*" in text          # edith enabled but not installed
+        assert "not yet installed" in text   # footnote
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
