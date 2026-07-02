@@ -108,6 +108,23 @@ python3 harness_sync.py apply --dry-run --prune   # preview deletions ("-x" line
 Prune never touches skills with `targets: ["ignore"]` (tracked but left alone)
 nor skills absent from the manifest — foreign content is never deleted.
 
+## Agents & slash commands
+
+Claude's subagents (`<base>/agents/*.md`) and slash commands
+(`<base>/commands/*.md`) sync **between Claude-type harnesses** (Codex has no
+equivalent — codex targets are warned and skipped). They flow through the SAME
+commands and TUI as skills, addressed as `kind:name`:
+
+```bash
+python3 harness_sync.py status                    # rows like agents:sdd-apply.md
+python3 harness_sync.py adopt                     # walks skills, then agents, then commands
+python3 harness_sync.py untrack agents:bot.md
+python3 harness_sync.py refresh commands:sdd-ff.md claude
+```
+
+Skills stay unprefixed. The manifest gains additive `"agents"` / `"commands"`
+sections with the same `{"targets": [...]}` schema.
+
 ## MCP servers
 
 MCP servers are portable across harnesses — only the config **format** differs:
