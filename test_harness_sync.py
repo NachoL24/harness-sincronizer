@@ -856,6 +856,87 @@ def test_harness_kind_dir_claude_only():
         assert hs.harness_kind_dir(p, "codex", "skills") is not None  # skills everywhere
 
 
+def _agent_paths(t: Path) -> "hs.Paths":
+    return hs.Paths(
+        repo_skills=t / "repo" / "skills",
+        manifest=t / "repo" / "manifest.json",
+        backups=t / "repo" / ".backups",
+        registry=t / "repo" / "harnesses.json",
+        harness_skills={"claude": t / "cc" / "skills",
+                        "claude-perso": t / "cp" / "skills",
+                        "codex": t / "cx" / "skills"},
+        harness_types={"claude": "claude", "claude-perso": "claude", "codex": "codex"},
+    )
+
+
+def test_agent_states_adopt_apply_roundtrip():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _agent_paths(t)
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        agents = t / "cc" / "agents"
+        agents.mkdir(parents=True)
+        (agents / "bot.md").write_text("agent body")
+
+        rows = {r["name"]: r for r in hs.compute_states(p, kind="agents")}
+        assert rows["bot.md"]["claude"] == "untracked"
+        assert rows["bot.md"]["codex"] == "absent"          # claude_only
+
+        hs.adopt_skill(p, "bot.md", "claude", ["claude", "claude-perso"], kind="agents")
+        assert (t / "repo" / "agents" / "bot.md").read_text() == "agent body"
+        assert hs.load_manifest(p.manifest)["agents"]["bot.md"] == {
+            "targets": ["claude", "claude-perso"]}
+
+        changes = hs.apply_all(p)
+        assert "agents:bot.md -> claude-perso" in changes
+        assert (t / "cp" / "agents" / "bot.md").read_text() == "agent body"
+        assert hs.apply_all(p) == []                        # idempotent
+
+
+def test_agent_apply_skips_codex_target_with_warning():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _agent_paths(t)
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        (t / "repo" / "agents").mkdir(parents=True)
+        (t / "repo" / "agents" / "bot.md").write_text("x")
+        hs.save_manifest(p.manifest, {"skills": {}, "agents": {
+            "bot.md": {"targets": ["codex"]}}})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = hs.apply_all(p)
+        assert changes == []
+        assert "codex" in err.getvalue()
+        assert not (t / "cx" / "agents").exists()
+
+
+def test_agent_untrack_refresh_prune():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _agent_paths(t)
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        agents_cc = t / "cc" / "agents"
+        agents_cc.mkdir(parents=True)
+        (agents_cc / "bot.md").write_text("v1")
+        hs.adopt_skill(p, "bot.md", "claude", ["claude"], kind="agents")
+
+        (agents_cc / "bot.md").write_text("v2")
+        hs.refresh_skill(p, "bot.md", "claude", kind="agents")
+        assert (t / "repo" / "agents" / "bot.md").read_text() == "v2"
+
+        agents_cp = t / "cp" / "agents"
+        agents_cp.mkdir(parents=True)
+        (agents_cp / "bot.md").write_text("stray")
+        changes = hs.prune_all(p)
+        assert changes == ["agents:bot.md -x claude-perso"]
+        assert not (agents_cp / "bot.md").exists()
+
+        hs.untrack_skill(p, "bot.md", kind="agents")
+        assert "bot.md" not in hs.load_manifest(p.manifest).get("agents", {})
+        assert not (t / "repo" / "agents" / "bot.md").exists()
+        assert (agents_cc / "bot.md").exists()
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

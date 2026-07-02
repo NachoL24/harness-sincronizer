@@ -288,10 +288,13 @@ def harness_remove(paths: Paths, name: str) -> None:
     save_registry(paths.registry, data)
 
 
-def compute_states(paths: Paths) -> list[dict]:
-    repo = scan(paths.repo_skills)
+def compute_states(paths: Paths, kind: str = "skills") -> list[dict]:
+    repo = scan_kind(repo_kind_dir(paths, kind), kind)
     names = list(paths.harness_skills)
-    harness = {h: scan(paths.harness_skills[h]) for h in names}
+    harness = {}
+    for h in names:
+        hd = harness_kind_dir(paths, h, kind)
+        harness[h] = scan_kind(hd, kind) if hd is not None else {}
     all_names = set(repo) | {n for m in harness.values() for n in m}
     rows = []
     for name in sorted(all_names):
@@ -332,15 +335,18 @@ def backup_skill(paths: Paths, label: str, name: str, src: Path) -> None:
         shutil.copytree(src, backup)
 
 
-def import_skill(paths: Paths, name: str, src_dir: Path, targets: list[str]) -> None:
-    copy_skill(src_dir, paths.repo_skills / name)
+def import_skill(paths: Paths, name: str, src_dir: Path, targets: list[str],
+                 kind: str = "skills") -> None:
+    copy_skill(src_dir, repo_kind_dir(paths, kind) / name)
     man = load_manifest(paths.manifest)
-    man["skills"][name] = {"targets": list(targets)}
+    man.setdefault(kind, {})[name] = {"targets": list(targets)}
     save_manifest(paths.manifest, man)
 
 
-def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str]) -> None:
-    import_skill(paths, name, paths.harness_skills[source_harness] / name, targets)
+def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str],
+                kind: str = "skills") -> None:
+    src = harness_kind_dir(paths, source_harness, kind) / name
+    import_skill(paths, name, src, targets, kind)
 
 
 def adopt_plugin(paths: Paths, plugin: dict, targets: list[str]) -> tuple[list[str], list[str]]:
@@ -355,39 +361,52 @@ def adopt_plugin(paths: Paths, plugin: dict, targets: list[str]) -> tuple[list[s
     return adopted, skipped
 
 
-def refresh_skill(paths: Paths, name: str, source_harness: str) -> None:
+def refresh_skill(paths: Paths, name: str, source_harness: str, kind: str = "skills") -> None:
     man = load_manifest(paths.manifest)
-    if name not in man["skills"]:
+    if name not in man.get(kind, {}):
         raise KeyError(name)
-    repo_dir = paths.repo_skills / name
-    if repo_dir.is_dir():
-        backup_skill(paths, "repo", name, repo_dir)
-    copy_skill(paths.harness_skills[source_harness] / name, repo_dir)
+    repo_asset = repo_kind_dir(paths, kind) / name
+    if repo_asset.exists():
+        backup_skill(paths, "repo", name, repo_asset)
+    copy_skill(harness_kind_dir(paths, source_harness, kind) / name, repo_asset)
 
 
-def untrack_skill(paths: Paths, name: str) -> None:
+def _remove_asset(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+
+
+def untrack_skill(paths: Paths, name: str, kind: str = "skills") -> None:
     man = load_manifest(paths.manifest)
-    if name not in man["skills"]:
+    if name not in man.get(kind, {}):
         raise KeyError(name)
-    del man["skills"][name]
+    del man[kind][name]
     save_manifest(paths.manifest, man)
-    repo_dir = paths.repo_skills / name
-    if repo_dir.is_dir():
-        backup_skill(paths, "repo", name, repo_dir)
-        shutil.rmtree(repo_dir)
+    repo_asset = repo_kind_dir(paths, kind) / name
+    if repo_asset.exists():
+        backup_skill(paths, "repo", name, repo_asset)
+        _remove_asset(repo_asset)
 
 
-def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = False) -> list[str]:
-    src = paths.repo_skills / name
+def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = False,
+                kind: str = "skills") -> list[str]:
+    src = repo_kind_dir(paths, kind) / name
     src_hash = skill_hash(src)
     changes: list[str] = []
     for h in targets:
         if h not in paths.harness_skills:
             continue
-        dst = paths.harness_skills[h] / name
-        if dst.is_dir() and skill_hash(dst) == src_hash:
+        hd = harness_kind_dir(paths, h, kind)
+        if hd is None:
+            print(f"warning: {kind} '{name}' cannot target codex-type harness '{h}' — skipping",
+                  file=sys.stderr)
             continue
-        changes.append(f"{name} -> {h}")
+        dst = hd / name
+        if dst.exists() and skill_hash(dst) == src_hash:
+            continue
+        changes.append(f"{format_asset_name(kind, name)} -> {h}")
         if dry_run:
             continue
         if dst.exists():
@@ -399,35 +418,41 @@ def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = Fal
 def apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
     man = load_manifest(paths.manifest)
     changes: list[str] = []
-    for name, cfg in sorted(man["skills"].items()):
-        targets = cfg.get("targets", [])
-        if "ignore" in targets:
-            continue
-        for t in targets:
-            if t not in paths.harness_skills:
-                print(f"warning: skill '{name}' targets unknown harness '{t}' — skipping", file=sys.stderr)
-        changes += apply_skill(paths, name, targets, dry_run)
+    for kind in KINDS:
+        for name, cfg in sorted(man.get(kind, {}).items()):
+            targets = cfg.get("targets", [])
+            if "ignore" in targets:
+                continue
+            for t in targets:
+                if t not in paths.harness_skills:
+                    print(f"warning: {kind} '{name}' targets unknown harness '{t}' — skipping",
+                          file=sys.stderr)
+            changes += apply_skill(paths, name, targets, dry_run, kind)
     return changes
 
 
 def prune_all(paths: Paths, dry_run: bool = False) -> list[str]:
     man = load_manifest(paths.manifest)
     changes: list[str] = []
-    for name, cfg in sorted(man["skills"].items()):
-        targets = cfg.get("targets", [])
-        if "ignore" in targets:
-            continue
-        for h, skills_dir in paths.harness_skills.items():
-            if h in targets:
+    for kind in KINDS:
+        for name, cfg in sorted(man.get(kind, {}).items()):
+            targets = cfg.get("targets", [])
+            if "ignore" in targets:
                 continue
-            dst = skills_dir / name
-            if not dst.is_dir():
-                continue
-            changes.append(f"{name} -x {h}")
-            if dry_run:
-                continue
-            backup_skill(paths, h, name, dst)
-            shutil.rmtree(dst)
+            for h in paths.harness_skills:
+                if h in targets:
+                    continue
+                hd = harness_kind_dir(paths, h, kind)
+                if hd is None:
+                    continue
+                dst = hd / name
+                if not dst.exists():
+                    continue
+                changes.append(f"{format_asset_name(kind, name)} -x {h}")
+                if dry_run:
+                    continue
+                backup_skill(paths, h, name, dst)
+                _remove_asset(dst)
     return changes
 
 
