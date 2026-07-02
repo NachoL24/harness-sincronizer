@@ -89,6 +89,23 @@ python3 harness_sync.py apply             # actually sync
 - before overwriting an existing skill, it backs it up to
   `.harness-sync-backups/<timestamp>/<harness>/<name>/`.
 
+### Untracking and pruning
+
+Two explicit, always-backed-up exits from management:
+
+```bash
+python3 harness_sync.py untrack <name>       # forget a skill: manifest entry +
+                                             # repo copy removed (backed up);
+                                             # harness copies untouched
+python3 harness_sync.py apply --prune        # ALSO delete tracked skills from
+                                             # harnesses they are no longer
+                                             # targeted to (backup first)
+python3 harness_sync.py apply --dry-run --prune   # preview deletions ("-x" lines)
+```
+
+Prune never touches skills with `targets: ["ignore"]` (tracked but left alone)
+nor skills absent from the manifest — foreign content is never deleted.
+
 ## Plugin skills
 
 Most skills don't live in `<base>/skills/` — they're bundled inside **Claude
@@ -121,11 +138,12 @@ pip install textual
 python3 harness_sync.py tui
 ```
 
-Five tabs: **Status** (color-coded state table), **Adopt** (checkbox
-multi-select of untracked/drift skills), **Plugins** (adopt whole plugins),
-**Apply** (review pending changes, then apply), **Harness** (manage the
-registry). Selection is batch-style: tick several items, choose the targets
-once, confirm. `r` refreshes, `q` quits.
+Five tabs: **Status** (color-coded state table; `u` untracks the skill under
+the cursor), **Adopt** (checkbox multi-select of untracked/drift skills),
+**Plugins** (adopt whole plugins), **Apply** (review pending changes, optional
+prune checkbox, then apply), **Harness** (manage the registry). Selection is
+batch-style: tick several items, choose the targets once, confirm. `r`
+refreshes, `q` quits.
 
 Without `textual` installed, `tui` prints an install hint and exits; every
 other command keeps working — the plain CLI remains the scriptable path.

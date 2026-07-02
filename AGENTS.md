@@ -23,8 +23,10 @@ repo. Each user builds their own canonical store via `adopt`.
   across three locations: the repo, Claude, and Codex. States: `synced`,
   `drift`, `untracked`, `absent`.
 - **Source of truth = the repo.** `apply` overwrites harness content from the
-  repo. It never deletes skills from a harness, and backs up any overwritten
-  directory to `.harness-sync-backups/` first.
+  repo. Deletion only happens when explicitly asked — `untrack` (repo side) or
+  `apply --prune` (harness side) — and every overwritten or deleted directory
+  is backed up to `.harness-sync-backups/` first. Foreign (unmanifested)
+  skills and `ignore`-targeted skills are never deleted.
 
 ## Commands
 
@@ -32,8 +34,13 @@ repo. Each user builds their own canonical store via `adopt`.
 - `python3 harness_sync.py adopt` — interactive; imports skills into the repo
   and records targets in the manifest. The non-interactive core is
   `adopt_skill()`.
-- `python3 harness_sync.py apply [--dry-run]` — declarative; pushes manifest
-  skills to their target harnesses. Idempotent.
+- `python3 harness_sync.py apply [--dry-run] [--prune]` — declarative; pushes
+  manifest skills to their target harnesses. Idempotent. `--prune` also deletes
+  tracked skills from harnesses they are de-targeted from (backup first;
+  `ignore`/foreign skills always spared).
+- `python3 harness_sync.py untrack <name>` — stop managing a skill: manifest
+  entry and repo copy removed (repo copy backed up); harness copies untouched.
+  Core: `untrack_skill()` (raises `KeyError` if untracked).
 - `python3 harness_sync.py harness list|add <name> <base>|remove <name>` —
   manage the harness registry (`harnesses.json`).
 - `python3 harness_sync.py plugins list|adopt` — discover skills bundled inside

@@ -10,7 +10,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import (
-    Button, DataTable, Footer, Header, Input, Label, Log, Select,
+    Button, Checkbox, DataTable, Footer, Header, Input, Label, Log, Select,
     SelectionList, Static, TabbedContent, TabPane,
 )
 from textual.widgets.selection_list import Selection
@@ -29,6 +29,7 @@ class HarnessSyncApp(App):
     TITLE = "harness-sync"
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
+        Binding("u", "untrack_cursor", "Untrack"),
         Binding("q", "quit", "Quit"),
         Binding("1", "tab('tab-status')", "Status", show=False),
         Binding("2", "tab('tab-adopt')", "Adopt", show=False),
@@ -52,6 +53,7 @@ class HarnessSyncApp(App):
     .panel-title { text-style: bold; color: $text-muted; }
     #apply-pending { height: 1fr; border: round $primary; }
     #apply-btn { width: 24; margin-top: 1; }
+    #prune-check { margin-top: 1; }
     #harness-row { height: auto; margin-top: 1; }
     #harness-name, #harness-base { width: 1fr; }
     #log { height: 6; border: round $primary; margin: 0 1; }
@@ -91,6 +93,7 @@ class HarnessSyncApp(App):
                         yield Button("Adopt selected plugins", id="plugins-btn", variant="primary")
             with TabPane("Apply", id="tab-apply"):
                 yield Log(id="apply-pending")
+                yield Checkbox("also prune de-targeted skills", id="prune-check")
                 yield Button("Apply now", id="apply-btn", variant="warning")
             with TabPane("Harness", id="tab-harness"):
                 yield DataTable(id="harness-table", cursor_type="row")
@@ -224,6 +227,8 @@ class HarnessSyncApp(App):
         pending = self.query_one("#apply-pending", Log)
         pending.clear()
         changes = hs.apply_all(self.paths, dry_run=True)
+        if self.query_one("#prune-check", Checkbox).value:
+            changes += hs.prune_all(self.paths, dry_run=True)
         if not changes:
             pending.write_line("nothing to do")
         for c in changes:
@@ -239,10 +244,32 @@ class HarnessSyncApp(App):
     @on(Button.Pressed, "#apply-btn")
     def do_apply(self) -> None:
         changes = hs.apply_all(self.paths)
+        if self.query_one("#prune-check", Checkbox).value:
+            changes += hs.prune_all(self.paths)
         if not changes:
             self._log("apply: nothing to do")
         for c in changes:
             self._log(f"applied {c}")
+        self.action_refresh()
+
+    @on(Checkbox.Changed, "#prune-check")
+    def prune_toggled(self) -> None:
+        self._refresh_apply()
+
+    def action_untrack_cursor(self) -> None:
+        if self.query_one(TabbedContent).active != "tab-status":
+            self._log("untrack: switch to the Status tab first")
+            return
+        table = self.query_one("#status-table", DataTable)
+        if table.row_count == 0:
+            return
+        name = str(table.get_row_at(table.cursor_row)[0])
+        try:
+            hs.untrack_skill(self.paths, name)
+        except KeyError:
+            self._log(f"untrack: '{name}' is not tracked")
+            return
+        self._log(f"untracked {name} (repo copy backed up; harnesses untouched)")
         self.action_refresh()
 
     @on(Button.Pressed, "#harness-add-btn")

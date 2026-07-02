@@ -168,6 +168,12 @@ def copy_skill(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst)
 
 
+def backup_skill(paths: Paths, label: str, name: str, src: Path) -> None:
+    backup = paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S") / label / name
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, backup)
+
+
 def import_skill(paths: Paths, name: str, src_dir: Path, targets: list[str]) -> None:
     copy_skill(src_dir, paths.repo_skills / name)
     man = load_manifest(paths.manifest)
@@ -191,6 +197,18 @@ def adopt_plugin(paths: Paths, plugin: dict, targets: list[str]) -> tuple[list[s
     return adopted, skipped
 
 
+def untrack_skill(paths: Paths, name: str) -> None:
+    man = load_manifest(paths.manifest)
+    if name not in man["skills"]:
+        raise KeyError(name)
+    del man["skills"][name]
+    save_manifest(paths.manifest, man)
+    repo_dir = paths.repo_skills / name
+    if repo_dir.is_dir():
+        backup_skill(paths, "repo", name, repo_dir)
+        shutil.rmtree(repo_dir)
+
+
 def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = False) -> list[str]:
     src = paths.repo_skills / name
     src_hash = skill_hash(src)
@@ -205,9 +223,7 @@ def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = Fal
         if dry_run:
             continue
         if dst.exists():
-            backup = paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S") / h / name
-            backup.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(dst, backup)
+            backup_skill(paths, h, name, dst)
         copy_skill(src, dst)
     return changes
 
@@ -223,6 +239,27 @@ def apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
             if t not in paths.harness_skills:
                 print(f"warning: skill '{name}' targets unknown harness '{t}' — skipping", file=sys.stderr)
         changes += apply_skill(paths, name, targets, dry_run)
+    return changes
+
+
+def prune_all(paths: Paths, dry_run: bool = False) -> list[str]:
+    man = load_manifest(paths.manifest)
+    changes: list[str] = []
+    for name, cfg in sorted(man["skills"].items()):
+        targets = cfg.get("targets", [])
+        if "ignore" in targets:
+            continue
+        for h, skills_dir in paths.harness_skills.items():
+            if h in targets:
+                continue
+            dst = skills_dir / name
+            if not dst.is_dir():
+                continue
+            changes.append(f"{name} -x {h}")
+            if dry_run:
+                continue
+            backup_skill(paths, h, name, dst)
+            shutil.rmtree(dst)
     return changes
 
 
@@ -273,8 +310,10 @@ def cmd_adopt(paths: Paths) -> None:
         print(f"  adopted {name} from {source} -> {targets}")
 
 
-def cmd_apply(paths: Paths, dry_run: bool) -> None:
+def cmd_apply(paths: Paths, dry_run: bool, prune: bool = False) -> None:
     changes = apply_all(paths, dry_run)
+    if prune:
+        changes += prune_all(paths, dry_run)
     prefix = "[dry-run] " if dry_run else ""
     if not changes:
         print("nothing to do")
@@ -323,6 +362,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("adopt", help="interactively import skills into the repo")
     ap = sub.add_parser("apply", help="push manifest skills to harnesses")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--prune", action="store_true",
+                    help="also delete de-targeted tracked skills from harnesses")
     hp = sub.add_parser("harness", help="manage the harness registry")
     hsub = hp.add_subparsers(dest="haction", required=True)
     hsub.add_parser("list", help="list registered harnesses")
@@ -336,6 +377,8 @@ def main(argv: list[str] | None = None) -> int:
     psub.add_parser("list", help="list discovered plugin skills")
     psub.add_parser("adopt", help="interactively adopt whole plugins into the repo")
     sub.add_parser("tui", help="launch the full-screen dashboard (requires textual)")
+    up = sub.add_parser("untrack", help="stop managing a skill (repo copy backed up; harnesses untouched)")
+    up.add_argument("name")
     args = parser.parse_args(argv)
 
     try:
@@ -349,7 +392,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "adopt":
         cmd_adopt(paths)
     elif args.cmd == "apply":
-        cmd_apply(paths, args.dry_run)
+        cmd_apply(paths, args.dry_run, args.prune)
     elif args.cmd == "harness":
         if args.haction == "list":
             cmd_harness_list(paths)
@@ -371,6 +414,13 @@ def main(argv: list[str] | None = None) -> int:
             print("error: the TUI requires textual — pip install textual", file=sys.stderr)
             return 2
         tui_run(Path(__file__).resolve().parent)
+    elif args.cmd == "untrack":
+        try:
+            untrack_skill(paths, args.name)
+        except KeyError:
+            print(f"error: '{args.name}' is not tracked", file=sys.stderr)
+            return 1
+        print(f"untracked '{args.name}' (repo copy backed up; harnesses untouched)")
     return 0
 
 

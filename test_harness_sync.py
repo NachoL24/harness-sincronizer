@@ -402,6 +402,115 @@ def test_tui_harness_add_via_real_click():
         asyncio.run(go())
 
 
+def test_untrack_removes_manifest_and_repo_with_backup():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "v1"})
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "v1"})
+        hs.save_manifest(p.manifest, {"skills": {"alpha": {"targets": ["claude"]}}})
+
+        hs.untrack_skill(p, "alpha")
+
+        assert "alpha" not in hs.load_manifest(p.manifest)["skills"]
+        assert not (p.repo_skills / "alpha").exists()                      # repo copy gone
+        backups = list(p.backups.rglob("repo/alpha/SKILL.md"))
+        assert backups and backups[0].read_text() == "v1"                  # backed up
+        assert (p.harness_skills["claude"] / "alpha" / "SKILL.md").exists()  # harness untouched
+
+
+def test_untrack_unknown_raises():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _paths_in(Path(tmp))
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        raised = False
+        try:
+            hs.untrack_skill(p, "ghost")
+        except KeyError:
+            raised = True
+        assert raised
+
+
+def test_prune_removes_detargeted_with_backup():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "v1"})
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "old"})
+        _make_skill(p.harness_skills["codex"], "alpha", {"SKILL.md": "v1"})
+        # alpha targeted only to codex -> claude copy is de-targeted
+        hs.save_manifest(p.manifest, {"skills": {"alpha": {"targets": ["codex"]}}})
+
+        changes = hs.prune_all(p)
+
+        assert changes == ["alpha -x claude"]
+        assert not (p.harness_skills["claude"] / "alpha").exists()
+        assert (p.harness_skills["codex"] / "alpha").exists()              # targeted stays
+        backups = list(p.backups.rglob("claude/alpha/SKILL.md"))
+        assert backups and backups[0].read_text() == "old"
+
+
+def test_prune_spares_ignore_and_foreign():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "kept", {"SKILL.md": "k"})
+        _make_skill(p.harness_skills["claude"], "kept", {"SKILL.md": "k"})
+        _make_skill(p.harness_skills["claude"], "foreign", {"SKILL.md": "f"})
+        hs.save_manifest(p.manifest, {"skills": {"kept": {"targets": ["ignore"]}}})
+
+        changes = hs.prune_all(p)
+
+        assert changes == []
+        assert (p.harness_skills["claude"] / "kept").exists()      # ignore -> untouched
+        assert (p.harness_skills["claude"] / "foreign").exists()   # unmanifested -> untouched
+
+
+def test_prune_dry_run_deletes_nothing():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "v1"})
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "v1"})
+        hs.save_manifest(p.manifest, {"skills": {"alpha": {"targets": ["codex"]}}})
+
+        changes = hs.prune_all(p, dry_run=True)
+
+        assert changes == ["alpha -x claude"]
+        assert (p.harness_skills["claude"] / "alpha").exists()
+
+
+def test_tui_untrack_binding():
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return
+    import asyncio
+    from harness_tui import HarnessSyncApp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        repo = t / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "claude": {"base": str(t / "cc")}, "codex": {"base": str(t / "cx")}}}))
+        _make_skill(repo / "skills", "alpha", {"SKILL.md": "x"})
+        _make_skill(t / "cc" / "skills", "alpha", {"SKILL.md": "x"})
+        hs.save_manifest(repo / "manifest.json", {"skills": {"alpha": {"targets": ["claude"]}}})
+
+        async def go():
+            app = HarnessSyncApp(repo)
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                await pilot.press("u")
+                await pilot.pause()
+                assert "alpha" not in hs.load_manifest(repo / "manifest.json")["skills"]
+                assert not (repo / "skills" / "alpha").exists()
+                assert (t / "cc" / "skills" / "alpha").exists()  # harness untouched
+
+        asyncio.run(go())
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
