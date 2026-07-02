@@ -1308,6 +1308,37 @@ def test_settings_adopt_canonicalizes_and_copies_refs():
         assert "missing.sh" in err.getvalue()
 
 
+def test_settings_apply_replaces_key_and_materializes_files():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _settings_paths(t)
+        hs.settings_adopt(p, "hooks", "cc", ["cc", "cp"])
+        changes = hs.settings_apply_all(p)
+        assert changes == ["settings:hooks -> cp"]   # cc already synced
+        cp = json.loads((t / "cp" / "settings.json").read_text())
+        cmd = cp["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        assert cmd == f"bash {t}/cp/hooks/n.sh"       # target base resolved
+        assert cp["model"] == "sonnet"                # unrelated key preserved
+        assert (t / "cp" / "hooks" / "n.sh").read_text() == "echo v1"
+        assert hs.settings_apply_all(p) == []         # idempotent
+
+
+def test_settings_apply_dry_run_backup_and_skips():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _settings_paths(t)
+        hs.settings_adopt(p, "hooks", "cc", ["cc", "cp", "cx", "nope"])
+        before = (t / "cp" / "settings.json").read_text()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            assert hs.settings_apply_all(p, dry_run=True) == ["settings:hooks -> cp"]
+        assert (t / "cp" / "settings.json").read_text() == before
+        assert "cx" in err.getvalue() and "nope" in err.getvalue()
+        with contextlib.redirect_stderr(io.StringIO()):
+            hs.settings_apply_all(p)
+        assert any(b.name == "settings.json" for b in p.backups.rglob("*"))
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

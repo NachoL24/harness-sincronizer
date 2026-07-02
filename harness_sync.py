@@ -657,16 +657,20 @@ def plugin_sync_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
                 settings.setdefault("extraKnownMarketplaces", {})[mname] = \
                     {"source": cfg["marketplace"]}
             pending[t] = settings
+    _flush_settings(paths, pending, "_plugins")
+    return changes
+
+
+def _flush_settings(paths: Paths, pending: dict[str, dict], label: str) -> None:
     for h, settings in pending.items():
         path = _harness_base(paths, h) / "settings.json"
         if path.exists():
             backup = (paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S")
-                      / h / "_plugins" / path.name)
+                      / h / label / path.name)
             backup.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, backup)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(settings, indent=2) + "\n")
-    return changes
 
 
 SETTINGS_EXCLUDED = {"enabledPlugins", "extraKnownMarketplaces"}
@@ -759,6 +763,48 @@ def settings_adopt(paths: Paths, key: str, source_harness: str,
     man = load_manifest(paths.manifest)
     man.setdefault("settings", {})[key] = {"targets": list(targets), "value": value}
     save_manifest(paths.manifest, man)
+
+
+def settings_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
+    man = load_manifest(paths.manifest).get("settings", {})
+    changes: list[str] = []
+    pending: dict[str, dict] = {}
+    for key, cfg in sorted(man.items()):
+        targets = cfg.get("targets", [])
+        if "ignore" in targets:
+            continue
+        for t in targets:
+            if t not in paths.harness_skills or paths.harness_types[t] != "claude":
+                print(f"warning: settings key '{key}' targets non-claude or "
+                      f"unknown harness '{t}' — skipping", file=sys.stderr)
+                continue
+            base = _harness_base(paths, t)
+            settings = pending.get(t)
+            if settings is None:
+                settings = read_settings(base / "settings.json")
+            desired = resolve_value(cfg["value"], base)
+            file_jobs = []
+            for rel in sorted(referenced_paths(cfg["value"])):
+                repo_f = _settings_files_dir(paths) / rel
+                tgt = base / rel
+                if repo_f.is_file() and (not tgt.is_file()
+                                         or skill_hash(tgt) != skill_hash(repo_f)):
+                    file_jobs.append((repo_f, tgt, rel))
+            if settings.get(key) == desired and not file_jobs:
+                continue
+            changes.append(f"settings:{key} -> {t}")
+            if dry_run:
+                continue
+            for repo_f, tgt, rel in file_jobs:
+                if tgt.exists():
+                    backup_skill(paths, f"{t}/_settings", rel, tgt)
+                tgt.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(repo_f, tgt)
+            if settings.get(key) != desired:
+                settings[key] = desired
+                pending[t] = settings
+    _flush_settings(paths, pending, "_settings")
+    return changes
 
 
 def cmd_status(paths: Paths) -> None:
