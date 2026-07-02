@@ -619,6 +619,50 @@ def plugin_sync_adopt(paths: Paths, key: str, source_harness: str,
     save_manifest(paths.manifest, man)
 
 
+def plugin_sync_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
+    man = load_manifest(paths.manifest).get("plugins", {})
+    changes: list[str] = []
+    pending: dict[str, dict] = {}
+    for key, cfg in sorted(man.items()):
+        targets = cfg.get("targets", [])
+        if "ignore" in targets:
+            continue
+        mname = key.split("@", 1)[1] if "@" in key else key
+        for t in targets:
+            if t not in paths.harness_skills or paths.harness_types[t] != "claude":
+                print(f"warning: plugin '{key}' targets non-claude or unknown "
+                      f"harness '{t}' — skipping", file=sys.stderr)
+                continue
+            settings = pending.get(t)
+            if settings is None:
+                settings = read_settings(_harness_base(paths, t) / "settings.json")
+            need_flag = settings.get("enabledPlugins", {}).get(key) is not True
+            need_mkt = (cfg.get("marketplace") is not None
+                        and mname not in _known_marketplaces(paths, t)
+                        and mname not in settings.get("extraKnownMarketplaces", {}))
+            if not need_flag and not need_mkt:
+                continue
+            changes.append(f"plugin:{key} -> {t}")
+            if dry_run:
+                continue
+            if need_flag:
+                settings.setdefault("enabledPlugins", {})[key] = True
+            if need_mkt:
+                settings.setdefault("extraKnownMarketplaces", {})[mname] = \
+                    {"source": cfg["marketplace"]}
+            pending[t] = settings
+    for h, settings in pending.items():
+        path = _harness_base(paths, h) / "settings.json"
+        if path.exists():
+            backup = (paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S")
+                      / h / "_plugins" / path.name)
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backup)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings, indent=2) + "\n")
+    return changes
+
+
 def cmd_status(paths: Paths) -> None:
     names = list(paths.harness_skills)
     w = {h: max(len(h), 10) for h in names}

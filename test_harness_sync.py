@@ -1148,6 +1148,51 @@ def test_plugin_sync_adopt_records_marketplace_source():
         assert hs.load_manifest(p.manifest)["plugins"]["ghost@nowhere"]["marketplace"] is None
 
 
+def test_plugin_sync_apply_sets_flag_and_marketplace():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _plugin_paths(t)
+        changes = hs.plugin_sync_apply_all(p)
+        assert changes == ["plugin:pony@mkt -> cp"]      # cc already synced
+        cp = json.loads((t / "cp" / "settings.json").read_text())
+        assert cp["enabledPlugins"]["pony@mkt"] is True  # false overwritten
+        assert cp["extraKnownMarketplaces"]["mkt"] == {
+            "source": {"source": "github", "repo": "o/mkt"}}
+        # idempotent
+        assert hs.plugin_sync_apply_all(p) == []
+
+
+def test_plugin_sync_apply_preserves_keys_backs_up_and_dry_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _plugin_paths(t)
+        before = (t / "cp" / "settings.json").read_text()
+        assert hs.plugin_sync_apply_all(p, dry_run=True) == ["plugin:pony@mkt -> cp"]
+        assert (t / "cp" / "settings.json").read_text() == before  # untouched
+        hs.plugin_sync_apply_all(p)
+        backups = list(p.backups.rglob("settings.json"))
+        assert len(backups) == 1 and json.loads(backups[0].read_text()) == json.loads(before)
+        cc = json.loads((t / "cc" / "settings.json").read_text())
+        assert cc["theme"] == "dark"  # unrelated keys preserved (cc untouched here)
+
+
+def test_plugin_sync_apply_skips_codex_unknown_and_creates_settings():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _plugin_paths(t)
+        man = hs.load_manifest(p.manifest)
+        man["plugins"]["pony@mkt"]["targets"] = ["cx", "nope", "cp"]
+        hs.save_manifest(p.manifest, man)
+        (t / "cp" / "settings.json").unlink()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = hs.plugin_sync_apply_all(p)
+        assert changes == ["plugin:pony@mkt -> cp"]
+        assert "cx" in err.getvalue() and "nope" in err.getvalue()
+        cp = json.loads((t / "cp" / "settings.json").read_text())
+        assert cp["enabledPlugins"]["pony@mkt"] is True
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
