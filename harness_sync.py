@@ -384,6 +384,10 @@ def copy_skill(src: Path, dst: Path) -> None:
 
 def backup_skill(paths: Paths, label: str, name: str, src: Path) -> None:
     backup = paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S") / label / name
+    n = 1
+    while backup.exists():  # same asset backed up twice within one second
+        backup = backup.with_name(f"{name}-{n}")
+        n += 1
     backup.parent.mkdir(parents=True, exist_ok=True)
     if src.is_file():
         shutil.copy2(src, backup)
@@ -511,6 +515,85 @@ def prune_all(paths: Paths, dry_run: bool = False) -> list[str]:
                 backup_skill(paths, h, name, dst)
                 _remove_asset(dst)
     return changes
+
+
+def two_way_sync(paths: Paths, dry_run: bool = False) -> dict:
+    man = load_manifest(paths.manifest)
+    state = load_state(paths)
+    result = {"push": [], "pull": [], "conflict": [], "warn": []}
+    for kind in KINDS:
+        for name, cfg in sorted(man.get(kind, {}).items()):
+            if "ignore" in cfg.get("targets", []):
+                continue
+            targets = [t for t in cfg.get("targets", []) if t in paths.harness_skills]
+            label = format_asset_name(kind, name)
+            repo_asset = repo_kind_dir(paths, kind) / name
+            if not repo_asset.exists():
+                result["warn"].append(f"{label}: repo copy missing — untrack or re-adopt")
+                continue
+            repo_hash = skill_hash(repo_asset)
+            entry = state.setdefault(kind, {}).setdefault(name, {})
+            harness_hash = {}
+            for h in targets:
+                dst = harness_asset_path(paths, h, kind, name)
+                if dst is None:  # codex-type target of a claude-only kind
+                    harness_hash[h] = None
+                    continue
+                harness_hash[h] = skill_hash(dst) if dst.exists() else None
+
+            # phase 1: pull harness-only changes (repo unchanged since last sync)
+            for h in targets:
+                h_hash = harness_hash[h]
+                if h_hash is None or h_hash == repo_hash:
+                    continue
+                if repo_hash == entry.get(h):
+                    result["pull"].append(f"pull {label} <- {h}")
+                    if not dry_run:
+                        refresh_skill(paths, name, h, kind)
+                    repo_hash = h_hash
+                    entry[h] = h_hash
+
+            # phase 2: push, record, or report
+            for h in targets:
+                dst = harness_asset_path(paths, h, kind, name)
+                if dst is None:
+                    continue
+                h_hash = harness_hash[h]
+                last = entry.get(h)
+                if h_hash == repo_hash:
+                    entry[h] = repo_hash
+                    continue
+                if h_hash is None and last is not None:
+                    result["warn"].append(
+                        f"{label}: deleted in '{h}' — untrack it, or run "
+                        f"'resolve {label} repo' to restore")
+                    continue
+                if h_hash == last:  # covers both None (never synced -> provision)
+                    result["push"].append(f"push {label} -> {h}")
+                    if dry_run:
+                        continue
+                    if dst.exists():
+                        backup_skill(paths, h, name, dst)
+                    copy_skill(repo_asset, dst)
+                    entry[h] = repo_hash
+                else:
+                    result["conflict"].append(f"conflict {label} : {h}")
+    if not dry_run:
+        save_state(paths, state)
+    return result
+
+
+def resolve_conflict(paths: Paths, name: str, winner: str,
+                     kind: str = "skills") -> list[str]:
+    man = load_manifest(paths.manifest)
+    if name not in man.get(kind, {}):
+        raise KeyError(name)
+    if winner != "repo" and winner not in paths.harness_skills:
+        raise ValueError(winner)
+    if winner != "repo":
+        refresh_skill(paths, name, winner, kind)
+    targets = [t for t in man[kind][name].get("targets", []) if t != "ignore"]
+    return apply_skill(paths, name, targets, False, kind)
 
 
 def _mcp_harness_servers(paths: Paths) -> dict[str, dict[str, dict]]:

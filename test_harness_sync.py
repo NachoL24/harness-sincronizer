@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -1372,6 +1373,101 @@ def test_sync_state_recorded_by_apply_refresh_adopt():
         assert hs.load_state(p)["skills"]["gamma"]["claude"] == g2  # refresh records pull
         hs.apply_skill(p, "gamma", ["codex"], dry_run=True)
         assert hs.load_state(p)["skills"]["gamma"]["codex"] == g    # dry-run records nothing
+
+
+def test_two_way_sync_push_pull_and_stale_second_harness():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "v1"})
+        hs.adopt_skill(p, "alpha", "claude", ["claude", "codex"])
+        hs.apply_skill(p, "alpha", ["claude", "codex"])
+        # harness-only change in claude -> pulled, then pushed to stale codex
+        _make_skill(p.harness_skills["claude"], "alpha", {"SKILL.md": "v2"})
+        r = hs.two_way_sync(p)
+        assert r["pull"] == ["pull alpha <- claude"]
+        assert r["push"] == ["push alpha -> codex"]
+        assert (p.repo_skills / "alpha" / "SKILL.md").read_text() == "v2"
+        assert (p.harness_skills["codex"] / "alpha" / "SKILL.md").read_text() == "v2"
+        # repo-only change -> push both
+        _make_skill(p.repo_skills, "alpha", {"SKILL.md": "v3"})
+        r = hs.two_way_sync(p)
+        assert r["pull"] == [] and sorted(r["push"]) == [
+            "push alpha -> claude", "push alpha -> codex"]
+        assert hs.two_way_sync(p) == {"push": [], "pull": [], "conflict": [], "warn": []}
+
+
+def test_two_way_sync_conflicts_and_guards():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.harness_skills["claude"], "beta", {"SKILL.md": "v1"})
+        hs.adopt_skill(p, "beta", "claude", ["claude"])
+        # both changed -> conflict, nothing written
+        _make_skill(p.repo_skills, "beta", {"SKILL.md": "repo-edit"})
+        _make_skill(p.harness_skills["claude"], "beta", {"SKILL.md": "claude-edit"})
+        r = hs.two_way_sync(p)
+        assert r["conflict"] == ["conflict beta : claude"]
+        assert (p.repo_skills / "beta" / "SKILL.md").read_text() == "repo-edit"
+        assert (p.harness_skills["claude"] / "beta" / "SKILL.md").read_text() == "claude-edit"
+        # missing baseline + difference -> conflict (unattributable)
+        _make_skill(p.repo_skills, "gamma", {"SKILL.md": "x"})
+        _make_skill(p.harness_skills["claude"], "gamma", {"SKILL.md": "y"})
+        man = hs.load_manifest(p.manifest)
+        man["skills"]["gamma"] = {"targets": ["claude"]}
+        hs.save_manifest(p.manifest, man)
+        r = hs.two_way_sync(p)
+        assert "conflict gamma : claude" in r["conflict"]
+        # harness deletion -> warn, never pulled as deletion
+        hs.resolve_conflict(p, "beta", "repo")
+        shutil.rmtree(p.harness_skills["claude"] / "beta")
+        r = hs.two_way_sync(p)
+        assert any("deleted in 'claude'" in w for w in r["warn"])
+        assert (p.repo_skills / "beta").exists()
+        # repo copy missing -> warn
+        shutil.rmtree(p.repo_skills / "gamma")
+        r = hs.two_way_sync(p)
+        assert any(w.startswith("gamma: repo copy missing") for w in r["warn"])
+
+
+def test_two_way_sync_dry_run_and_resolve():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        _make_skill(p.harness_skills["claude"], "delta", {"SKILL.md": "v1"})
+        hs.adopt_skill(p, "delta", "claude", ["claude", "codex"])
+        hs.apply_skill(p, "delta", ["claude", "codex"])
+        _make_skill(p.harness_skills["claude"], "delta", {"SKILL.md": "v2"})
+        state_before = hs.load_state(p)
+        r = hs.two_way_sync(p, dry_run=True)
+        assert r["pull"] == ["pull delta <- claude"]
+        assert r["push"] == ["push delta -> codex"]      # simulated post-pull hash
+        assert (p.repo_skills / "delta" / "SKILL.md").read_text() == "v1"
+        assert hs.load_state(p) == state_before
+        # conflict resolution: harness wins
+        _make_skill(p.repo_skills, "delta", {"SKILL.md": "repo-edit"})
+        assert hs.two_way_sync(p, dry_run=True)["conflict"] == ["conflict delta : claude"]
+        hs.resolve_conflict(p, "delta", "claude")
+        assert (p.repo_skills / "delta" / "SKILL.md").read_text() == "v2"
+        assert (p.harness_skills["codex"] / "delta" / "SKILL.md").read_text() == "v2"
+        assert hs.two_way_sync(p) == {"push": [], "pull": [], "conflict": [], "warn": []}
+        try:
+            hs.resolve_conflict(p, "delta", "nope")
+            assert False, "expected ValueError"
+        except ValueError:
+            pass
+
+
+def test_backup_skill_same_second_no_collision():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        d = _make_skill(t, "src", {"SKILL.md": "a"})
+        hs.backup_skill(p, "claude", "x", d)
+        (d / "SKILL.md").write_text("b")
+        hs.backup_skill(p, "claude", "x", d)   # same second: must not raise
+        backups = sorted(f.parent.name for f in p.backups.rglob("SKILL.md"))
+        assert len(backups) == 2 and backups[0] != backups[1]
 
 
 if __name__ == "__main__":
