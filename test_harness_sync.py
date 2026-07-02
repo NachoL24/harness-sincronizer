@@ -1134,6 +1134,20 @@ def test_plugin_sync_states_vocab_and_claude_only():
         assert "off@mkt" not in rows          # disabled + untracked -> not a row
 
 
+def test_plugin_sync_adopt_records_marketplace_source():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _plugin_paths(Path(tmp))
+        hs.plugin_sync_adopt(p, "edith@nn", "cc", ["cc", "cp"])
+        man = hs.load_manifest(p.manifest)["plugins"]
+        assert man["edith@nn"] == {
+            "targets": ["cc", "cp"],
+            "marketplace": {"source": "github", "repo": "o/nn"},
+        }
+        # unknown marketplace -> None recorded
+        hs.plugin_sync_adopt(p, "ghost@nowhere", "cc", ["cp"])
+        assert hs.load_manifest(p.manifest)["plugins"]["ghost@nowhere"]["marketplace"] is None
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

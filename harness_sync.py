@@ -603,6 +603,22 @@ def plugin_sync_states(paths: Paths) -> list[dict]:
     return rows
 
 
+def plugin_sync_adopt(paths: Paths, key: str, source_harness: str,
+                      targets: list[str]) -> None:
+    base = _harness_base(paths, source_harness)
+    mname = key.split("@", 1)[1] if "@" in key else key
+    src = None
+    f = base / "plugins" / "known_marketplaces.json"
+    if f.exists():
+        src = json.loads(f.read_text()).get(mname, {}).get("source")
+    if src is None:
+        src = (read_settings(base / "settings.json")
+               .get("extraKnownMarketplaces", {}).get(mname, {}).get("source"))
+    man = load_manifest(paths.manifest)
+    man.setdefault("plugins", {})[key] = {"targets": list(targets), "marketplace": src}
+    save_manifest(paths.manifest, man)
+
+
 def cmd_status(paths: Paths) -> None:
     names = list(paths.harness_skills)
     w = {h: max(len(h), 10) for h in names}
