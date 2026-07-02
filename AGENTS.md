@@ -50,6 +50,13 @@ repo. Each user builds their own canonical store via `adopt`.
 - `python3 harness_sync.py tui` — full-screen dashboard (Status / Adopt /
   Plugins / Apply / Harness). Requires `textual`; presentation-only layer in
   `harness_tui.py`, lazy-imported with an install hint when missing.
+- `python3.12 harness_sync.py mcp list|adopt|apply [--dry-run]` — sync global
+  MCP server definitions (Claude `.claude.json` JSON ↔ Codex `config.toml`
+  TOML). Needs Python 3.11+ (`tomllib`, lazily gated — the rest of the CLI
+  runs on older interpreters). Surgical writes: JSON touches only
+  `mcpServers`; TOML splices only managed `[mcp_servers.*]` blocks. Manifest
+  section: top-level `"mcp"` (`{targets, config}` per server). Registry
+  entries may carry `"type": "claude"|"codex"` (inferred when absent).
 
 ## Harnesses (the registry)
 
@@ -90,8 +97,8 @@ Follow TDD: write the failing test first, then the minimal implementation.
 
 ## Non-goals (v1)
 
-MCP server sync (JSON↔TOML), instruction-file sync (`CLAUDE.md`↔`AGENTS.md`),
-pruning/deletion from harnesses, and two-way auto propagation. These are meant
-to layer onto the same base later.
+Instruction-file sync (`CLAUDE.md`↔`AGENTS.md`) and two-way auto propagation.
+These are meant to layer onto the same base later. (MCP sync and
+untrack/pruning shipped after v1.)
 
 Design and plan live under `docs/superpowers/`.

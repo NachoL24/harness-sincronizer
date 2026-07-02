@@ -106,6 +106,34 @@ python3 harness_sync.py apply --dry-run --prune   # preview deletions ("-x" line
 Prune never touches skills with `targets: ["ignore"]` (tracked but left alone)
 nor skills absent from the manifest — foreign content is never deleted.
 
+## MCP servers
+
+MCP servers are portable across harnesses — only the config **format** differs:
+Claude keeps them in `.claude.json` (`mcpServers`, JSON), Codex in
+`config.toml` (`[mcp_servers.<name>]`, TOML). `harness-sync` translates between
+the two:
+
+```bash
+python3.12 harness_sync.py mcp list     # server × harness state table
+python3.12 harness_sync.py mcp adopt    # pick servers + targets (interactive)
+python3.12 harness_sync.py mcp apply --dry-run
+python3.12 harness_sync.py mcp apply
+```
+
+- **Python 3.11+ required for `mcp` commands only** (stdlib `tomllib`); every
+  other command still runs on older interpreters.
+- Writes are **surgical**: JSON touches only the `mcpServers` key; TOML
+  replaces only the managed `[mcp_servers.*]` blocks — comments and unrelated
+  sections keep their exact bytes. Config files are backed up before writing.
+- Servers not in the manifest are never modified or deleted.
+- Server definitions (including `env` values) live in the gitignored
+  `manifest.json`, so secrets never reach this repo.
+- Scope: global servers only (no project-scoped `.mcp.json`).
+
+The registry can mark a harness's type explicitly
+(`harness add <name> <base> [claude|codex]`); by default the type is inferred
+(`codex` for the name `codex`, `claude` otherwise).
+
 ## Plugin skills
 
 Most skills don't live in `<base>/skills/` — they're bundled inside **Claude
