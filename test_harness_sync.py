@@ -1049,6 +1049,38 @@ def test_instructions_roundtrip():
         assert not (t / "repo" / "instructions" / "global.md").exists()
 
 
+def test_themes_kind_scans_json():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / "themes"
+        root.mkdir()
+        (root / "gentleman.json").write_text("{}")
+        (root / "readme.md").write_text("not a theme")
+        assert set(hs.scan_kind(root, "themes")) == {"gentleman.json"}
+
+
+def test_statusline_fixed_kind_roundtrip():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _agent_paths(t)  # claude, claude-perso, codex
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        (t / "cc").mkdir(parents=True, exist_ok=True)
+        (t / "cc" / "statusline-command.sh").write_text("#!/bin/sh\necho hi")
+        (t / "cp").mkdir(parents=True, exist_ok=True)
+
+        rows = {r["name"]: r for r in hs.compute_states(p, kind="statusline")}
+        assert rows["statusline-command.sh"]["claude"] == "untracked"
+        assert rows["statusline-command.sh"]["codex"] == "absent"      # claude_only
+
+        hs.adopt_skill(p, "statusline-command.sh", "claude",
+                       ["claude", "claude-perso"], kind="statusline")
+        assert (t / "repo" / "statusline" / "statusline-command.sh").exists()
+
+        changes = hs.apply_all(p)
+        assert "statusline:statusline-command.sh -> claude-perso" in changes
+        assert (t / "cp" / "statusline-command.sh").read_text().endswith("echo hi")
+        assert hs.apply_all(p) == []                                   # idempotent
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

@@ -125,6 +125,13 @@ python3 harness_sync.py refresh commands:sdd-ff.md claude
 Skills stay unprefixed. The manifest gains additive `"agents"` / `"commands"`
 sections with the same `{"targets": [...]}` schema.
 
+## Cosmetic assets (Claude ↔ Claude)
+
+Personal-preference assets sync between Claude accounts (Codex has no
+equivalent): `output-styles:*.md`, `themes:*.json`,
+`statusline:statusline-command.sh`, `keybindings:keybindings.json`. Same
+adopt/apply flows, same `kind:name` addressing.
+
 ## Instruction files
 
 The global instruction file syncs across harness types as ONE logical asset,

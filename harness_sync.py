@@ -71,11 +71,19 @@ KINDS = {
     "skills": {"asset": "dir", "claude_only": False},
     "agents": {"asset": "file", "claude_only": True},
     "commands": {"asset": "file", "claude_only": True},
-    "instructions": {"asset": "file", "claude_only": False,
+    "instructions": {"asset": "file", "claude_only": False, "logical": "global.md",
                      "names": {"claude": "CLAUDE.md", "codex": "AGENTS.md"}},
+    "output-styles": {"asset": "file", "claude_only": True},
+    "themes": {"asset": "file", "claude_only": True, "pattern": "*.json"},
+    "statusline": {"asset": "file", "claude_only": True,
+                   "logical": "statusline-command.sh",
+                   "names": {"claude": "statusline-command.sh"}},
+    "keybindings": {"asset": "file", "claude_only": True,
+                    "logical": "keybindings.json",
+                    "names": {"claude": "keybindings.json"}},
 }
 
-FIXED_ASSET = "global.md"
+FIXED_ASSET = "global.md"  # the instructions kind's logical asset name
 
 
 def parse_asset_name(s: str) -> tuple[str, str]:
@@ -113,11 +121,16 @@ def scan(skills_dir: Path) -> dict[str, str]:
 
 
 def scan_kind(root: Path, kind: str) -> dict[str, str]:
-    if KINDS[kind]["asset"] == "dir":
+    spec = KINDS[kind]
+    if spec["asset"] == "dir":
         return scan(root)
+    if "names" in spec:  # fixed-name kind: at most one logical asset
+        p = root / spec["logical"]
+        return {spec["logical"]: skill_hash(p)} if p.is_file() else {}
     if not root.is_dir():
         return {}
-    return {f.name: skill_hash(f) for f in sorted(root.glob("*.md")) if f.is_file()}
+    pattern = spec.get("pattern", "*.md")
+    return {f.name: skill_hash(f) for f in sorted(root.glob(pattern)) if f.is_file()}
 
 
 def harness_kind_dir(paths: Paths, harness: str, kind: str) -> Path | None:
@@ -141,9 +154,11 @@ def harness_asset_path(paths: Paths, harness: str, kind: str, name: str) -> Path
 
 
 def _harness_kind_scan(paths: Paths, harness: str, kind: str) -> dict[str, str]:
-    if "names" in KINDS[kind]:
-        p = harness_asset_path(paths, harness, kind, FIXED_ASSET)
-        return {FIXED_ASSET: skill_hash(p)} if p and p.is_file() else {}
+    spec = KINDS[kind]
+    if "names" in spec:
+        logical = spec["logical"]
+        p = harness_asset_path(paths, harness, kind, logical)
+        return {logical: skill_hash(p)} if p and p.is_file() else {}
     hd = harness_kind_dir(paths, harness, kind)
     return scan_kind(hd, kind) if hd is not None else {}
 
