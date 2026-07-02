@@ -511,6 +511,35 @@ def test_tui_untrack_binding():
         asyncio.run(go())
 
 
+def test_discover_plugins_nested_layout_with_dedupe():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        install = t / "cc" / "plugins" / "cache" / "pony" / "abc"
+        # "lazy" exists ONLY in the nested layout <installPath>/plugins/<x>/skills/
+        nested_lazy = install / "plugins" / "pony" / "skills" / "lazy"
+        nested_lazy.mkdir(parents=True)
+        (nested_lazy / "SKILL.md").write_text("# nested lazy")
+        # "dup" exists in BOTH layouts (canonical must win the dedupe)
+        nested_dup = install / "plugins" / "pony" / "skills" / "dup"
+        nested_dup.mkdir(parents=True)
+        (nested_dup / "SKILL.md").write_text("# nested dup")
+        canonical_dup = install / "skills" / "dup"
+        canonical_dup.mkdir(parents=True)
+        (canonical_dup / "SKILL.md").write_text("# canonical dup")
+        pj = t / "cc" / "plugins" / "installed_plugins.json"
+        pj.parent.mkdir(parents=True, exist_ok=True)
+        pj.write_text(json.dumps({"version": 2, "plugins": {
+            "pony@mkt": [{"installPath": str(install), "version": "1"}]}}))
+
+        plugins = hs.discover_plugins(p)
+
+        assert len(plugins) == 1
+        names = [n for n, _ in plugins[0]["skills"]]
+        assert names == ["dup", "lazy"]                                  # nested-only found
+        assert dict(plugins[0]["skills"])["dup"] == canonical_dup        # canonical wins
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

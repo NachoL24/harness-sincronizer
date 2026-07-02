@@ -90,16 +90,21 @@ def discover_plugins(paths: Paths) -> list[dict]:
     for harness, skills_dir in paths.harness_skills.items():
         plugins_dir = skills_dir.parent / "plugins"
         for plugin_key, install_path in read_installed_plugins(plugins_dir):
-            sdir = install_path / "skills"
-            if not sdir.is_dir():
-                continue
-            skills = [
-                (d.name, d)
-                for d in sorted(sdir.iterdir())
-                if d.is_dir() and (d / "SKILL.md").exists()
-            ]
-            if skills:
-                plugins.append({"plugin": plugin_key, "harness": harness, "skills": skills})
+            # canonical layout first so it wins the dedupe over nested layouts
+            skill_roots = [install_path / "skills"]
+            nested = install_path / "plugins"
+            if nested.is_dir():
+                skill_roots += sorted(d / "skills" for d in nested.iterdir() if d.is_dir())
+            seen: dict[str, Path] = {}
+            for root in skill_roots:
+                if not root.is_dir():
+                    continue
+                for d in sorted(root.iterdir()):
+                    if d.is_dir() and (d / "SKILL.md").exists() and d.name not in seen:
+                        seen[d.name] = d
+            if seen:
+                plugins.append({"plugin": plugin_key, "harness": harness,
+                                "skills": sorted(seen.items())})
     return plugins
 
 
