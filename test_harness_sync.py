@@ -480,6 +480,37 @@ def test_prune_dry_run_deletes_nothing():
         assert (p.harness_skills["claude"] / "alpha").exists()
 
 
+def test_tui_untrack_binding():
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return
+    import asyncio
+    from harness_tui import HarnessSyncApp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        repo = t / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "claude": {"base": str(t / "cc")}, "codex": {"base": str(t / "cx")}}}))
+        _make_skill(repo / "skills", "alpha", {"SKILL.md": "x"})
+        _make_skill(t / "cc" / "skills", "alpha", {"SKILL.md": "x"})
+        hs.save_manifest(repo / "manifest.json", {"skills": {"alpha": {"targets": ["claude"]}}})
+
+        async def go():
+            app = HarnessSyncApp(repo)
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                await pilot.press("u")
+                await pilot.pause()
+                assert "alpha" not in hs.load_manifest(repo / "manifest.json")["skills"]
+                assert not (repo / "skills" / "alpha").exists()
+                assert (t / "cc" / "skills" / "alpha").exists()  # harness untouched
+
+        asyncio.run(go())
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
