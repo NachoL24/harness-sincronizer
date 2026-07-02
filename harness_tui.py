@@ -17,6 +17,12 @@ from textual.widgets.selection_list import Selection
 
 import harness_sync as hs
 
+try:
+    import tomllib  # noqa: F401
+    HAS_TOMLLIB = True
+except ImportError:
+    HAS_TOMLLIB = False
+
 STATE_STYLE = {
     "synced": "green",
     "drift": "yellow",
@@ -34,8 +40,9 @@ class HarnessSyncApp(App):
         Binding("1", "tab('tab-status')", "Status", show=False),
         Binding("2", "tab('tab-adopt')", "Adopt", show=False),
         Binding("3", "tab('tab-plugins')", "Plugins", show=False),
-        Binding("4", "tab('tab-apply')", "Apply", show=False),
-        Binding("5", "tab('tab-harness')", "Harness", show=False),
+        Binding("4", "tab('tab-mcp')", "MCP", show=False),
+        Binding("5", "tab('tab-apply')", "Apply", show=False),
+        Binding("6", "tab('tab-harness')", "Harness", show=False),
     ]
     # Height discipline is the load-bearing part of this stylesheet: every
     # scrollable gets 1fr, never auto, so no pane can outgrow the screen and
@@ -91,6 +98,23 @@ class HarnessSyncApp(App):
                         yield Label("Targets", classes="panel-title")
                         yield SelectionList(id="plugins-targets")
                         yield Button("Adopt selected plugins", id="plugins-btn", variant="primary")
+            with TabPane("MCP", id="tab-mcp"):
+                if HAS_TOMLLIB:
+                    yield DataTable(id="mcp-table", cursor_type="row")
+                    with Horizontal(classes="picker"):
+                        with Vertical():
+                            yield Label("Servers (untracked/drift)", classes="panel-title")
+                            yield SelectionList(id="mcp-servers")
+                        with Vertical(classes="side"):
+                            yield Label("Targets", classes="panel-title")
+                            yield SelectionList(id="mcp-targets")
+                            yield Label("Source (when ambiguous)", classes="panel-title")
+                            yield Select([("auto (first available)", "auto")],
+                                         value="auto", id="mcp-source")
+                            yield Button("Adopt selected", id="mcp-btn", variant="primary")
+                else:
+                    yield Static("MCP sync requires Python 3.11+ (tomllib) — "
+                                 "run the TUI with python3.11 or newer.")
             with TabPane("Apply", id="tab-apply"):
                 yield Log(id="apply-pending")
                 yield Checkbox("also prune de-targeted skills", id="prune-check")
@@ -119,6 +143,7 @@ class HarnessSyncApp(App):
         self._refresh_status()
         self._refresh_adopt()
         self._refresh_plugins()
+        self._refresh_mcp()
         self._refresh_apply()
         self._refresh_harness()
 
@@ -223,12 +248,55 @@ class HarnessSyncApp(App):
             self._log(msg)
         self.action_refresh()
 
+    def _refresh_mcp(self) -> None:
+        if not HAS_TOMLLIB:
+            return
+        names = list(self.paths.harness_skills)
+        table = self.query_one("#mcp-table", DataTable)
+        table.clear(columns=True)
+        table.add_columns("SERVER", "REPO", *[n.upper() for n in names])
+        servers = self.query_one("#mcp-servers", SelectionList)
+        servers.clear_options()
+        self._mcp_adoptable: dict[str, list[str]] = {}
+        for row in hs.mcp_states(self.paths):
+            cells = [row["name"], "yes" if row["repo"] else "no"]
+            for h in names:
+                cells.append(Text(row[h], style=STATE_STYLE.get(row[h], "")))
+            table.add_row(*cells)
+            available = [h for h in names if row[h] in ("untracked", "drift")]
+            if available:
+                self._mcp_adoptable[row["name"]] = available
+                detail = ", ".join(f"{h}:{row[h]}" for h in available)
+                servers.add_option(Selection(f"{row['name']}  ({detail})", row["name"]))
+        self._fill_targets("#mcp-targets", names)
+        source = self.query_one("#mcp-source", Select)
+        source.set_options([("auto (first available)", "auto")] + [(h, h) for h in names])
+        source.value = "auto"
+
+    @on(Button.Pressed, "#mcp-btn")
+    def adopt_selected_mcp(self) -> None:
+        chosen = self.query_one("#mcp-servers", SelectionList).selected
+        raw_targets = self.query_one("#mcp-targets", SelectionList).selected
+        if not chosen or not raw_targets:
+            self._log("mcp: select at least one server and one target")
+            return
+        targets = self._batch_targets(raw_targets)
+        source_pref = self.query_one("#mcp-source", Select).value
+        for name in chosen:
+            available = self._mcp_adoptable[name]
+            source = source_pref if source_pref in available else available[0]
+            hs.mcp_adopt_server(self.paths, name, source, targets)
+            self._log(f"adopted mcp server {name} from {source} -> {targets}")
+        self.action_refresh()
+
     def _refresh_apply(self) -> None:
         pending = self.query_one("#apply-pending", Log)
         pending.clear()
         changes = hs.apply_all(self.paths, dry_run=True)
         if self.query_one("#prune-check", Checkbox).value:
             changes += hs.prune_all(self.paths, dry_run=True)
+        if HAS_TOMLLIB:
+            changes += [f"mcp: {c}" for c in hs.mcp_apply_all(self.paths, dry_run=True)]
         if not changes:
             pending.write_line("nothing to do")
         for c in changes:
@@ -246,6 +314,8 @@ class HarnessSyncApp(App):
         changes = hs.apply_all(self.paths)
         if self.query_one("#prune-check", Checkbox).value:
             changes += hs.prune_all(self.paths)
+        if HAS_TOMLLIB:
+            changes += [f"mcp: {c}" for c in hs.mcp_apply_all(self.paths)]
         if not changes:
             self._log("apply: nothing to do")
         for c in changes:
