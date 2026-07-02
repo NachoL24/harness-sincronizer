@@ -1081,6 +1081,59 @@ def test_statusline_fixed_kind_roundtrip():
         assert hs.apply_all(p) == []                                   # idempotent
 
 
+def _plugin_paths(t: Path) -> "hs.Paths":
+    p = hs.Paths(
+        repo_skills=t / "repo" / "skills",
+        manifest=t / "repo" / "manifest.json",
+        backups=t / "repo" / ".backups",
+        registry=t / "repo" / "harnesses.json",
+        harness_skills={"cc": t / "cc" / "skills", "cp": t / "cp" / "skills",
+                        "cx": t / "cx" / "skills"},
+        harness_types={"cc": "claude", "cp": "claude", "cx": "codex"},
+    )
+    for d in ("cc", "cp", "cx", "repo"):
+        (t / d).mkdir(parents=True, exist_ok=True)
+    (t / "cc" / "settings.json").write_text(json.dumps({
+        "theme": "dark",
+        "enabledPlugins": {"pony@mkt": True, "edith@nn": True, "off@mkt": False},
+        "extraKnownMarketplaces": {"mkt": {"source": {"source": "github", "repo": "o/mkt"}}},
+    }))
+    (t / "cc" / "plugins").mkdir(parents=True, exist_ok=True)
+    (t / "cc" / "plugins" / "known_marketplaces.json").write_text(json.dumps({
+        "mkt": {"source": {"source": "github", "repo": "o/mkt"}},
+        "nn": {"source": {"source": "github", "repo": "o/nn"}},
+    }))
+    (t / "cc" / "plugins" / "installed_plugins.json").write_text(json.dumps({
+        "version": 1,
+        "plugins": {"pony@mkt": [{"installPath": str(t / "cc"), "version": "1.0.0"}]},
+    }))
+    (t / "cp" / "settings.json").write_text(json.dumps({
+        "enabledPlugins": {"pony@mkt": False},
+    }))
+    hs.save_manifest(p.manifest, {"skills": {}, "plugins": {
+        "pony@mkt": {"targets": ["cc", "cp"],
+                     "marketplace": {"source": "github", "repo": "o/mkt"}},
+    }})
+    return p
+
+
+def test_plugin_sync_states_vocab_and_claude_only():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _plugin_paths(Path(tmp))
+        rows = {r["name"]: r for r in hs.plugin_sync_states(p)}
+        pony = rows["pony@mkt"]
+        assert pony["repo"] is True
+        assert pony["cc"] == "synced"
+        assert pony["cp"] == "drift"          # explicit false
+        assert "cx" not in pony               # codex excluded
+        assert pony["installed"] == {"cc": True, "cp": False}
+        edith = rows["edith@nn"]
+        assert edith["repo"] is False
+        assert edith["cc"] == "untracked"
+        assert edith["cp"] == "absent"
+        assert "off@mkt" not in rows          # disabled + untracked -> not a row
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

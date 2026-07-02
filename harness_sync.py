@@ -555,6 +555,54 @@ def mcp_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
     return changes
 
 
+def read_settings(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+def _claude_harnesses(paths: Paths) -> list[str]:
+    return [h for h in paths.harness_skills if paths.harness_types[h] == "claude"]
+
+
+def _harness_base(paths: Paths, harness: str) -> Path:
+    return paths.harness_skills[harness].parent
+
+
+def _known_marketplaces(paths: Paths, harness: str) -> set[str]:
+    base = _harness_base(paths, harness)
+    known = set(read_settings(base / "settings.json").get("extraKnownMarketplaces", {}))
+    f = base / "plugins" / "known_marketplaces.json"
+    if f.exists():
+        known |= set(json.loads(f.read_text()))
+    return known
+
+
+def plugin_sync_states(paths: Paths) -> list[dict]:
+    man = load_manifest(paths.manifest).get("plugins", {})
+    names = _claude_harnesses(paths)
+    enabled = {h: read_settings(_harness_base(paths, h) / "settings.json")
+               .get("enabledPlugins", {}) for h in names}
+    installed = {h: {k for k, _ in read_installed_plugins(_harness_base(paths, h) / "plugins")}
+                 for h in names}
+    keys = set(man) | {k for e in enabled.values() for k, v in e.items() if v}
+    rows = []
+    for key in sorted(keys):
+        tracked = key in man
+        row = {"name": key, "repo": tracked,
+               "installed": {h: key in installed[h] for h in names}}
+        for h in names:
+            v = enabled[h].get(key)
+            if v is None:
+                row[h] = "absent"
+            elif not tracked:
+                row[h] = "untracked"
+            else:
+                row[h] = "synced" if v else "drift"
+        rows.append(row)
+    return rows
+
+
 def cmd_status(paths: Paths) -> None:
     names = list(paths.harness_skills)
     w = {h: max(len(h), 10) for h in names}
