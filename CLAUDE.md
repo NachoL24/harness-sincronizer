@@ -62,6 +62,15 @@ repo. Each user builds their own canonical store via `adopt`.
   Claude plugins (per harness, via `installed_plugins.json`) and adopt them
   whole-plugin at a time into the repo. Repo-name collisions are skipped with a
   warning. `adopt_plugin()` is the non-interactive core.
+- `python3 harness_sync.py plugins sync-list|sync-adopt|sync-apply [--dry-run]`
+  — sync whole plugin *installs* between Claude accounts by syncing the
+  declarative settings layer (`enabledPlugins` + `extraKnownMarketplaces` in
+  `settings.json`); Claude Code materializes the install on next launch.
+  Claude-type harnesses only. Surgical writes (only those two keys; backup
+  first); machine-managed state (`installed_plugins.json`, cache, marketplace
+  clones) is never written. Manifest section: top-level `"plugins"`
+  (`{targets, marketplace}` per `plugin@marketplace` key). Pure JSON — runs on
+  Python 3.9, no tomllib needed.
 - `python3 harness_sync.py` (no subcommand) or `... tui` — full-screen
   dashboard, the **default command** (Status / Adopt / Plugins / MCP / Apply /
   Harness). Requires `textual`; presentation-only layer in `harness_tui.py`,

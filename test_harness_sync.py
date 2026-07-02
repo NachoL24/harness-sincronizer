@@ -1081,6 +1081,149 @@ def test_statusline_fixed_kind_roundtrip():
         assert hs.apply_all(p) == []                                   # idempotent
 
 
+def _plugin_paths(t: Path) -> "hs.Paths":
+    p = hs.Paths(
+        repo_skills=t / "repo" / "skills",
+        manifest=t / "repo" / "manifest.json",
+        backups=t / "repo" / ".backups",
+        registry=t / "repo" / "harnesses.json",
+        harness_skills={"cc": t / "cc" / "skills", "cp": t / "cp" / "skills",
+                        "cx": t / "cx" / "skills"},
+        harness_types={"cc": "claude", "cp": "claude", "cx": "codex"},
+    )
+    for d in ("cc", "cp", "cx", "repo"):
+        (t / d).mkdir(parents=True, exist_ok=True)
+    (t / "cc" / "settings.json").write_text(json.dumps({
+        "theme": "dark",
+        "enabledPlugins": {"pony@mkt": True, "edith@nn": True, "off@mkt": False},
+        "extraKnownMarketplaces": {"mkt": {"source": {"source": "github", "repo": "o/mkt"}}},
+    }))
+    (t / "cc" / "plugins").mkdir(parents=True, exist_ok=True)
+    (t / "cc" / "plugins" / "known_marketplaces.json").write_text(json.dumps({
+        "mkt": {"source": {"source": "github", "repo": "o/mkt"}},
+        "nn": {"source": {"source": "github", "repo": "o/nn"}},
+    }))
+    (t / "cc" / "plugins" / "installed_plugins.json").write_text(json.dumps({
+        "version": 1,
+        "plugins": {"pony@mkt": [{"installPath": str(t / "cc"), "version": "1.0.0"}]},
+    }))
+    (t / "cp" / "settings.json").write_text(json.dumps({
+        "enabledPlugins": {"pony@mkt": False},
+    }))
+    hs.save_manifest(p.manifest, {"skills": {}, "plugins": {
+        "pony@mkt": {"targets": ["cc", "cp"],
+                     "marketplace": {"source": "github", "repo": "o/mkt"}},
+    }})
+    return p
+
+
+def test_plugin_sync_states_vocab_and_claude_only():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _plugin_paths(Path(tmp))
+        rows = {r["name"]: r for r in hs.plugin_sync_states(p)}
+        pony = rows["pony@mkt"]
+        assert pony["repo"] is True
+        assert pony["cc"] == "synced"
+        assert pony["cp"] == "drift"          # explicit false
+        assert "cx" not in pony               # codex excluded
+        assert pony["installed"] == {"cc": True, "cp": False}
+        edith = rows["edith@nn"]
+        assert edith["repo"] is False
+        assert edith["cc"] == "untracked"
+        assert edith["cp"] == "absent"
+        assert "off@mkt" not in rows          # disabled + untracked -> not a row
+
+
+def test_plugin_sync_adopt_records_marketplace_source():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _plugin_paths(Path(tmp))
+        hs.plugin_sync_adopt(p, "edith@nn", "cc", ["cc", "cp"])
+        man = hs.load_manifest(p.manifest)["plugins"]
+        assert man["edith@nn"] == {
+            "targets": ["cc", "cp"],
+            "marketplace": {"source": "github", "repo": "o/nn"},
+        }
+        # unknown marketplace -> None recorded
+        hs.plugin_sync_adopt(p, "ghost@nowhere", "cc", ["cp"])
+        assert hs.load_manifest(p.manifest)["plugins"]["ghost@nowhere"]["marketplace"] is None
+
+
+def test_plugin_sync_apply_sets_flag_and_marketplace():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _plugin_paths(t)
+        changes = hs.plugin_sync_apply_all(p)
+        assert changes == ["plugin:pony@mkt -> cp"]      # cc already synced
+        cp = json.loads((t / "cp" / "settings.json").read_text())
+        assert cp["enabledPlugins"]["pony@mkt"] is True  # false overwritten
+        assert cp["extraKnownMarketplaces"]["mkt"] == {
+            "source": {"source": "github", "repo": "o/mkt"}}
+        # idempotent
+        assert hs.plugin_sync_apply_all(p) == []
+
+
+def test_plugin_sync_apply_preserves_keys_backs_up_and_dry_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _plugin_paths(t)
+        before = (t / "cp" / "settings.json").read_text()
+        assert hs.plugin_sync_apply_all(p, dry_run=True) == ["plugin:pony@mkt -> cp"]
+        assert (t / "cp" / "settings.json").read_text() == before  # untouched
+        hs.plugin_sync_apply_all(p)
+        backups = list(p.backups.rglob("settings.json"))
+        assert len(backups) == 1 and json.loads(backups[0].read_text()) == json.loads(before)
+        cc = json.loads((t / "cc" / "settings.json").read_text())
+        assert cc["theme"] == "dark"  # unrelated keys preserved (cc untouched here)
+
+
+def test_plugin_sync_apply_skips_codex_unknown_and_creates_settings():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _plugin_paths(t)
+        man = hs.load_manifest(p.manifest)
+        man["plugins"]["pony@mkt"]["targets"] = ["cx", "nope", "cp"]
+        hs.save_manifest(p.manifest, man)
+        (t / "cp" / "settings.json").unlink()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = hs.plugin_sync_apply_all(p)
+        assert changes == ["plugin:pony@mkt -> cp"]
+        assert "cx" in err.getvalue() and "nope" in err.getvalue()
+        cp = json.loads((t / "cp" / "settings.json").read_text())
+        assert cp["enabledPlugins"]["pony@mkt"] is True
+
+
+def test_plugin_sync_apply_warns_when_marketplace_source_missing():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _plugin_paths(t)
+        hs.plugin_sync_adopt(p, "ghost@nowhere", "cc", ["cp"])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            changes = hs.plugin_sync_apply_all(p)
+        assert "plugin:ghost@nowhere -> cp" in changes
+        assert "nowhere" in err.getvalue() and "no marketplace source" in err.getvalue()
+        cp = json.loads((t / "cp" / "settings.json").read_text())
+        assert cp["enabledPlugins"]["ghost@nowhere"] is True
+        assert "nowhere" not in cp.get("extraKnownMarketplaces", {})
+
+
+def test_cli_plugin_sync_list_and_apply_dry_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _plugin_paths(Path(tmp))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            hs.cmd_plugin_sync_apply(p, dry_run=True)
+        assert "[dry-run] plugin:pony@mkt -> cp" in out.getvalue()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            hs.cmd_plugin_sync_list(p)
+        text = out.getvalue()
+        assert "pony@mkt" in text
+        assert "untracked*" in text          # edith enabled but not installed
+        assert "not yet installed" in text   # footnote
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
