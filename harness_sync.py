@@ -168,6 +168,12 @@ def copy_skill(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst)
 
 
+def backup_skill(paths: Paths, label: str, name: str, src: Path) -> None:
+    backup = paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S") / label / name
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, backup)
+
+
 def import_skill(paths: Paths, name: str, src_dir: Path, targets: list[str]) -> None:
     copy_skill(src_dir, paths.repo_skills / name)
     man = load_manifest(paths.manifest)
@@ -205,9 +211,7 @@ def apply_skill(paths: Paths, name: str, targets: list[str], dry_run: bool = Fal
         if dry_run:
             continue
         if dst.exists():
-            backup = paths.backups / datetime.now().strftime("%Y%m%dT%H%M%S") / h / name
-            backup.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(dst, backup)
+            backup_skill(paths, h, name, dst)
         copy_skill(src, dst)
     return changes
 
