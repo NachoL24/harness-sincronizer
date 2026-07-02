@@ -531,6 +531,46 @@ def cmd_plugins_adopt(paths: Paths) -> None:
         print(msg)
 
 
+def cmd_mcp_list(paths: Paths) -> None:
+    names = list(paths.harness_skills)
+    rows = mcp_states(paths)
+    if not rows:
+        print("no mcp servers found")
+        return
+    w = {h: max(len(h), 10) for h in names}
+    print(f"{'SERVER':24} {'REPO':5} " + " ".join(f"{h:{w[h]}}" for h in names))
+    for r in rows:
+        cells = " ".join(f"{r[h]:{w[h]}}" for h in names)
+        print(f"{r['name']:24} {'yes' if r['repo'] else 'no':5} " + cells)
+
+
+def cmd_mcp_adopt(paths: Paths) -> None:
+    names = list(paths.harness_skills)
+    for row in mcp_states(paths):
+        name = row["name"]
+        available = [h for h in names if row[h] in ("untracked", "drift")]
+        if not available:
+            continue
+        status = ", ".join(f"{h}:{row[h]}" for h in names)
+        print(f"\nMCP server: {name}  ({status})")
+        if input("  adopt? [y/N]: ").strip().lower() != "y":
+            continue
+        source = available[0] if len(available) == 1 else _prompt("  source", available)
+        targets = _prompt_targets(names)
+        mcp_adopt_server(paths, name, source, targets)
+        print(f"  adopted {name} from {source} -> {targets}")
+
+
+def cmd_mcp_apply(paths: Paths, dry_run: bool) -> None:
+    changes = mcp_apply_all(paths, dry_run)
+    prefix = "[dry-run] " if dry_run else ""
+    if not changes:
+        print("nothing to do")
+        return
+    for c in changes:
+        print(f"{prefix}{c}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="harness-sync")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -557,6 +597,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("tui", help="launch the full-screen dashboard (requires textual)")
     up = sub.add_parser("untrack", help="stop managing a skill (repo copy backed up; harnesses untouched)")
     up.add_argument("name")
+    mp = sub.add_parser("mcp", help="sync MCP server definitions between harnesses")
+    msub = mp.add_subparsers(dest="maction", required=True)
+    msub.add_parser("list", help="show MCP server states across harnesses")
+    msub.add_parser("adopt", help="interactively import MCP servers into the manifest")
+    map_ = msub.add_parser("apply", help="push manifest MCP servers to harnesses")
+    map_.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
     try:
@@ -599,6 +645,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: '{args.name}' is not tracked", file=sys.stderr)
             return 1
         print(f"untracked '{args.name}' (repo copy backed up; harnesses untouched)")
+    elif args.cmd == "mcp":
+        try:
+            if args.maction == "list":
+                cmd_mcp_list(paths)
+            elif args.maction == "adopt":
+                cmd_mcp_adopt(paths)
+            elif args.maction == "apply":
+                cmd_mcp_apply(paths, args.dry_run)
+        except RuntimeError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
     return 0
 
 
