@@ -987,6 +987,68 @@ def test_tui_asset_kinds_in_status_and_adopt():
         asyncio.run(go())
 
 
+def test_harness_asset_path_resolution():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)  # claude:claude, codex:codex
+        assert hs.harness_asset_path(p, "claude", "instructions", hs.FIXED_ASSET) == \
+            t / "cc" / "CLAUDE.md"
+        assert hs.harness_asset_path(p, "codex", "instructions", hs.FIXED_ASSET) == \
+            t / "cx" / "AGENTS.md"
+        assert hs.harness_asset_path(p, "codex", "agents", "x.md") is None  # claude_only
+        assert hs.harness_asset_path(p, "claude", "skills", "foo") == \
+            t / "cc" / "skills" / "foo"
+
+
+def test_harness_kind_scan_fixed_name():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        assert hs._harness_kind_scan(p, "claude", "instructions") == {}
+        (t / "cc").mkdir(parents=True, exist_ok=True)
+        (t / "cc" / "CLAUDE.md").write_text("rules")
+        scanned = hs._harness_kind_scan(p, "claude", "instructions")
+        assert list(scanned) == ["global.md"]
+
+
+def test_instructions_roundtrip():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        p = _paths_in(t)
+        p.manifest.parent.mkdir(parents=True, exist_ok=True)
+        (t / "cc").mkdir(parents=True, exist_ok=True)
+        (t / "cc" / "CLAUDE.md").write_text("shared rules")
+        (t / "cx").mkdir(parents=True, exist_ok=True)
+
+        hs.adopt_skill(p, hs.FIXED_ASSET, "claude", ["claude", "codex"],
+                       kind="instructions")
+        assert (t / "repo" / "instructions" / "global.md").read_text() == "shared rules"
+        assert hs.load_manifest(p.manifest)["instructions"]["global.md"] == {
+            "targets": ["claude", "codex"]}
+
+        changes = hs.apply_all(p)
+        assert "instructions:global.md -> codex" in changes
+        assert (t / "cx" / "AGENTS.md").read_text() == "shared rules"
+        assert hs.apply_all(p) == []                        # idempotent
+
+        rows = {r["name"]: r for r in hs.compute_states(p, kind="instructions")}
+        assert rows["global.md"]["claude"] == "synced"
+        assert rows["global.md"]["codex"] == "synced"
+
+        # codex edits AGENTS.md -> drift -> refresh pulls it back to the repo
+        (t / "cx" / "AGENTS.md").write_text("codex edits")
+        rows = {r["name"]: r for r in hs.compute_states(p, kind="instructions")}
+        assert rows["global.md"]["codex"] == "drift"
+        hs.refresh_skill(p, hs.FIXED_ASSET, "codex", kind="instructions")
+        assert (t / "repo" / "instructions" / "global.md").read_text() == "codex edits"
+
+        # untrack leaves harness files alone
+        hs.untrack_skill(p, hs.FIXED_ASSET, kind="instructions")
+        assert (t / "cc" / "CLAUDE.md").exists()
+        assert (t / "cx" / "AGENTS.md").exists()
+        assert not (t / "repo" / "instructions" / "global.md").exists()
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
