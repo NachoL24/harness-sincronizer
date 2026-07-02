@@ -952,6 +952,46 @@ def cmd_plugin_sync_apply(paths: Paths, dry_run: bool) -> None:
         print(f"{prefix}{c}")
 
 
+def cmd_settings_list(paths: Paths) -> None:
+    names = _claude_harnesses(paths)
+    rows = settings_states(paths)
+    if not rows:
+        print("no settings keys found")
+        return
+    w = {h: max(len(h), 10) for h in names}
+    print(f"{'KEY':28} {'REPO':5} " + " ".join(f"{h:{w[h]}}" for h in names))
+    for r in rows:
+        cells = " ".join(f"{r[h]:{w[h]}}" for h in names)
+        print(f"{r['name']:28} {'yes' if r['repo'] else 'no':5} " + cells)
+
+
+def cmd_settings_adopt(paths: Paths) -> None:
+    names = _claude_harnesses(paths)
+    for row in settings_states(paths):
+        key = row["name"]
+        available = [h for h in names if row[h] in ("untracked", "drift")]
+        if not available:
+            continue
+        status = ", ".join(f"{h}:{row[h]}" for h in names)
+        print(f"\nSettings key: {key}  ({status})")
+        if input("  adopt? [y/N]: ").strip().lower() != "y":
+            continue
+        source = available[0] if len(available) == 1 else _prompt("  source", available)
+        targets = _prompt_targets(names)
+        settings_adopt(paths, key, source, targets)
+        print(f"  adopted {key} from {source} -> {targets}")
+
+
+def cmd_settings_apply(paths: Paths, dry_run: bool) -> None:
+    changes = settings_apply_all(paths, dry_run)
+    prefix = "[dry-run] " if dry_run else ""
+    if not changes:
+        print("nothing to do")
+        return
+    for c in changes:
+        print(f"{prefix}{c}")
+
+
 def cmd_mcp_list(paths: Paths) -> None:
     names = list(paths.harness_skills)
     rows = mcp_states(paths)
@@ -1026,6 +1066,12 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("name")
     rp.add_argument("source", nargs="?", default=None,
                     help="source harness (default: the only drifted one)")
+    sp = sub.add_parser("settings", help="sync settings.json keys between Claude accounts")
+    ssub = sp.add_subparsers(dest="saction", required=True)
+    ssub.add_parser("list", help="show settings-key states across Claude accounts")
+    ssub.add_parser("adopt", help="interactively track settings keys in the manifest")
+    sap = ssub.add_parser("apply", help="push tracked settings keys to Claude accounts")
+    sap.add_argument("--dry-run", action="store_true")
     mp = sub.add_parser("mcp", help="sync MCP server definitions between harnesses")
     msub = mp.add_subparsers(dest="maction", required=True)
     msub.add_parser("list", help="show MCP server states across harnesses")
@@ -1068,6 +1114,13 @@ def main(argv: list[str] | None = None) -> int:
             cmd_plugin_sync_adopt(paths)
         elif args.paction == "sync-apply":
             cmd_plugin_sync_apply(paths, args.dry_run)
+    elif args.cmd == "settings":
+        if args.saction == "list":
+            cmd_settings_list(paths)
+        elif args.saction == "adopt":
+            cmd_settings_adopt(paths)
+        elif args.saction == "apply":
+            cmd_settings_apply(paths, args.dry_run)
     elif args.cmd == "tui":
         try:
             from harness_tui import run as tui_run

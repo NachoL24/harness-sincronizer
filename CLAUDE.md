@@ -71,6 +71,16 @@ repo. Each user builds their own canonical store via `adopt`.
   clones) is never written. Manifest section: top-level `"plugins"`
   (`{targets, marketplace}` per `plugin@marketplace` key). Pure JSON — runs on
   Python 3.9, no tomllib needed.
+- `python3 harness_sync.py settings list|adopt|apply [--dry-run]` — sync chosen
+  top-level `settings.json` keys (hooks, permissions, env, statusLine, ...)
+  between Claude accounts. Manifest section: top-level `"settings"`
+  (`{targets, value}` per key); values stored account-neutral — the source
+  base dir is canonicalized to `${HARNESS_BASE}` and resolved to each target's
+  base on apply. Referenced files (`${HARNESS_BASE}/rel/path` that exists at
+  adopt) are copied to repo `settings-files/` (gitignored) and materialized on
+  targets (hash-checked, backup first). Whole-key replace; unrelated keys
+  untouched; `enabledPlugins`/`extraKnownMarketplaces` excluded (plugin-sync
+  domain). Claude-type harnesses only.
 - `python3 harness_sync.py` (no subcommand) or `... tui` — full-screen
   dashboard, the **default command** (Status / Adopt / Plugins / MCP / Apply /
   Harness). Requires `textual`; presentation-only layer in `harness_tui.py`,

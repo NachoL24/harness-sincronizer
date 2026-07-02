@@ -1339,6 +1339,21 @@ def test_settings_apply_dry_run_backup_and_skips():
         assert any(b.name == "settings.json" for b in p.backups.rglob("*"))
 
 
+def test_cli_settings_list_and_apply_dry_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _settings_paths(Path(tmp))
+        hs.settings_adopt(p, "hooks", "cc", ["cc", "cp"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            hs.cmd_settings_apply(p, dry_run=True)
+        assert "[dry-run] settings:hooks -> cp" in out.getvalue()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            hs.cmd_settings_list(p)
+        text = out.getvalue()
+        assert "hooks" in text and "model" in text
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
