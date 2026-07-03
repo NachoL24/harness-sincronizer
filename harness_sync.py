@@ -1012,14 +1012,17 @@ def cmd_harness_list(paths: Paths) -> None:
 def cmd_plugins_list(paths: Paths) -> None:
     plugins = discover_plugins(paths)
     if not plugins:
-        print("no plugins found")
-        return
-    repo = set(scan(paths.repo_skills))
-    print(f"{'PLUGIN':40} {'HARNESS':14} {'SKILLS':7} {'IN-REPO':7}")
-    for p in plugins:
-        names = [n for n, _ in p["skills"]]
-        in_repo = sum(1 for n in names if n in repo)
-        print(f"{p['plugin']:40} {p['harness']:14} {len(names):<7} {in_repo:<7}")
+        print("no plugin skills found")
+    else:
+        repo = set(scan(paths.repo_skills))
+        print(f"{'PLUGIN':40} {'HARNESS':14} {'SKILLS':7} {'IN-REPO':7}")
+        for p in plugins:
+            names = [n for n, _ in p["skills"]]
+            in_repo = sum(1 for n in names if n in repo)
+            print(f"{p['plugin']:40} {p['harness']:14} {len(names):<7} {in_repo:<7}")
+    print("note: this lists plugin-bundled SKILLS ('plugins adopt' extracts them, "
+          "e.g. for Codex).\n      to sync whole plugin installs between Claude "
+          "accounts, see 'plugins sync-list'.")
 
 
 def cmd_plugins_adopt(paths: Paths) -> None:
@@ -1189,6 +1192,8 @@ def main(argv: list[str] | None = None) -> int:
     psub = pp.add_subparsers(dest="paction", required=True)
     psub.add_parser("list", help="list discovered plugin skills")
     psub.add_parser("adopt", help="interactively adopt whole plugins into the repo")
+    psub.add_parser("apply", help="not a command — use 'plugins sync-apply' (installs) "
+                                  "or plain 'apply' (adopted skills)")
     psub.add_parser("sync-list", help="show plugin install states across Claude accounts")
     psub.add_parser("sync-adopt", help="interactively track plugin installs in the manifest")
     psa = psub.add_parser("sync-apply", help="push tracked plugin installs to Claude accounts")
@@ -1250,6 +1255,13 @@ def main(argv: list[str] | None = None) -> int:
             cmd_plugins_list(paths)
         elif args.paction == "adopt":
             cmd_plugins_adopt(paths)
+        elif args.paction == "apply":
+            print("error: 'plugins apply' does not exist.\n"
+                  "  - to push whole plugin installs between Claude accounts: "
+                  "'plugins sync-apply'\n"
+                  "  - to push plugin skills already adopted into the repo: "
+                  "plain 'apply'", file=sys.stderr)
+            return 2
         elif args.paction == "sync-list":
             cmd_plugin_sync_list(paths)
         elif args.paction == "sync-adopt":
