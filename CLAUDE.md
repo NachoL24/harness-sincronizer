@@ -14,6 +14,14 @@ is synced blindly.
 are gitignored** — they live in your local checkout, not in this public tool
 repo. Each user builds their own canonical store via `adopt`.
 
+**Packaging & data dir**: distributed on PyPI as `harness-sync` (pyproject
+with setuptools, `py-modules`, console script `harness-sync = harness_sync:main`,
+optional extra `[tui]` → textual, `requires-python >=3.9`). The store location
+comes from `default_home()`: `$HARNESS_SYNC_HOME` env override → checkout mode
+(script dir has `manifest.json`/`harnesses.json`/`skills/`/`.git`) →
+`~/.harness-sync` (created by `main()`). Release: `python3.12 -m build` +
+`twine upload dist/*` (maintainer credentials).
+
 ## Architecture
 
 - **Pure, path-injected functions** do the work (hashing, scanning, manifest

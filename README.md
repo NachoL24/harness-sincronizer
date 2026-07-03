@@ -1,29 +1,50 @@
 # harness-sync
 
-Selective **skill synchronization** between AI coding harnesses — today
-**Claude Code ↔ Codex**. A neutral git repo is the source of truth: it holds the
-canonical skills and a manifest of what to sync where. Nothing is synced
-blindly — you decide, skill by skill.
+Selective **asset synchronization** between AI coding harnesses — **Claude
+Code ↔ Codex**, and between multiple Claude accounts. A neutral store is the
+source of truth: it holds the canonical assets and a manifest of what to sync
+where. Nothing is synced blindly — you decide, asset by asset.
 
-> v1 covers **skills only**. MCP servers, instruction files, pruning, and
-> two-way auto-sync are intentionally out of scope (see `CLAUDE.md`).
+It syncs skills, agents, slash commands, instruction files, cosmetic assets
+(themes, output styles, statusline, keybindings), MCP servers, whole plugin
+installs, and `settings.json` keys (hooks, permissions, env, ...) — with
+optional two-way sync and conflict detection for file-based assets.
 
-## Requirements
+## Install
 
-- Python **3.11+**
-- No dependencies (standard library only)
+```bash
+pipx install harness-sync          # or: uvx harness-sync (no install at all)
+pip install "harness-sync[tui]"    # with the optional textual dashboard
+harness-sync status
+```
+
+- Python **3.9+**, zero dependencies (stdlib only). The `mcp` subcommand and
+  the TUI's MCP tab need **3.11+** (stdlib `tomllib`); everything else runs on
+  3.9.
+- Running from a git clone (`python3 harness_sync.py ...`) works exactly as
+  before — no install needed.
+
+### Where your data lives
+
+The canonical store (`skills/`, `manifest.json`, `harnesses.json`, backups,
+sync state) resolves in this order:
+
+1. `$HARNESS_SYNC_HOME` — explicit override, always wins.
+2. **Checkout mode** — if you run the script from a clone that already has
+   store or dev markers (`manifest.json`, `harnesses.json`, `skills/`,
+   `.git`), that directory is the store (the pre-PyPI behavior).
+3. `~/.harness-sync/` — the default for installed usage, created on first run.
 
 ## How it works
 
 | Location | Path | Role |
 |----------|------|------|
-| Repo | `./skills/` + `./manifest.json` | **source of truth** (local, gitignored) |
+| Store | `<home>/skills/` + `<home>/manifest.json` | **source of truth** (local) |
 | Claude Code | `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills`) | sync target |
 | Codex | `~/.codex/skills/` (or `$CODEX_HOME/skills`) | sync target |
 
-> `skills/`, `manifest.json` and `harnesses.json` are **per-user runtime data**
-> and are gitignored — you build your own canonical store locally via `adopt`.
-> They are not shared through this repo.
+> The store is **per-user runtime data** (gitignored in this repo) — you build
+> your own via `adopt`. It is not shared through this repo.
 
 A skill is a directory (e.g. `branch-pr/`) containing `SKILL.md` plus any
 support files. The tool compares a content hash of each skill across the three
