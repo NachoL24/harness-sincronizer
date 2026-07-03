@@ -1530,6 +1530,46 @@ def test_plugins_list_hints_at_install_sync():
         assert "plugins sync-list" in out.getvalue()
 
 
+def test_tui_apply_tab_includes_plugin_and_settings_sync():
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return  # textual not installed — no-op
+    import asyncio
+    from textual.widgets import Log
+    from harness_tui import HarnessSyncApp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        repo = t / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "cc": {"base": str(t / "cc"), "type": "claude"},
+            "cp": {"base": str(t / "cp"), "type": "claude"}}}))
+        for h in ("cc", "cp"):
+            (t / h).mkdir(parents=True, exist_ok=True)
+        (t / "cc" / "settings.json").write_text(json.dumps({
+            "enabledPlugins": {"pony@mkt": True}, "model": "opus"}))
+        (t / "cp" / "settings.json").write_text(json.dumps({}))
+        hs.save_manifest(repo / "manifest.json", {"skills": {}, "plugins": {
+            "pony@mkt": {"targets": ["cc", "cp"],
+                         "marketplace": {"source": "github", "repo": "o/mkt"}},
+        }, "settings": {
+            "model": {"targets": ["cc", "cp"], "value": "opus"},
+        }})
+
+        async def go():
+            app = HarnessSyncApp(repo)
+            async with app.run_test(size=(130, 42)) as pilot:
+                await pilot.pause()
+                text = "\n".join(str(line) for line in
+                                  app.query_one("#apply-pending", Log).lines)
+                assert "plugin:pony@mkt -> cp" in text
+                assert "settings:model -> cp" in text
+
+        asyncio.run(go())
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

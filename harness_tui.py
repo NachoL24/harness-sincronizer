@@ -303,6 +303,8 @@ class HarnessSyncApp(App):
             changes += hs.prune_all(self.paths, dry_run=True)
         if HAS_TOMLLIB:
             changes += [f"mcp: {c}" for c in hs.mcp_apply_all(self.paths, dry_run=True)]
+        changes += hs.plugin_sync_apply_all(self.paths, dry_run=True)
+        changes += hs.settings_apply_all(self.paths, dry_run=True)
         if not changes:
             pending.write_line("nothing to do")
         for c in changes:
@@ -322,6 +324,8 @@ class HarnessSyncApp(App):
             changes += hs.prune_all(self.paths)
         if HAS_TOMLLIB:
             changes += [f"mcp: {c}" for c in hs.mcp_apply_all(self.paths)]
+        changes += hs.plugin_sync_apply_all(self.paths)
+        changes += hs.settings_apply_all(self.paths)
         if not changes:
             self._log("apply: nothing to do")
         for c in changes:
