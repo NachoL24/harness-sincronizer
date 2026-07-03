@@ -68,6 +68,18 @@ def resolve_paths(repo_root: Path) -> Paths:
     )
 
 
+def default_home(script_dir: Path | None = None) -> Path:
+    env = os.environ.get("HARNESS_SYNC_HOME")
+    if env:
+        return Path(env).expanduser()
+    if script_dir is None:
+        script_dir = Path(__file__).resolve().parent
+    markers = ("manifest.json", "harnesses.json", "skills", ".git")
+    if any((script_dir / m).exists() for m in markers):
+        return script_dir  # running from a checkout that is the store
+    return Path.home() / ".harness-sync"
+
+
 KINDS = {
     "skills": {"asset": "dir", "claude_only": False},
     "agents": {"asset": "file", "claude_only": True},
@@ -1210,8 +1222,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd is None:
         args.cmd = "tui"
 
+    home = default_home()
+    home.mkdir(parents=True, exist_ok=True)
     try:
-        paths = resolve_paths(Path(__file__).resolve().parent)
+        paths = resolve_paths(home)
     except json.JSONDecodeError as e:
         print(f"error: invalid harnesses.json: {e}", file=sys.stderr)
         return 2
@@ -1271,7 +1285,7 @@ def main(argv: list[str] | None = None) -> int:
         except ImportError:
             print("error: the TUI requires textual — pip install textual", file=sys.stderr)
             return 2
-        tui_run(Path(__file__).resolve().parent)
+        tui_run(home)
     elif args.cmd == "untrack":
         kind, name = parse_asset_name(args.name)
         try:

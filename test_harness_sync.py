@@ -1491,6 +1491,26 @@ def test_cli_sync_output_and_exit_code():
         assert "in sync" in out.getvalue()
 
 
+def test_default_home_resolution_modes():
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        # 1. env override wins always (and expands ~)
+        os.environ["HARNESS_SYNC_HOME"] = str(t / "store")
+        try:
+            assert hs.default_home(t / "anywhere") == t / "store"
+        finally:
+            del os.environ["HARNESS_SYNC_HOME"]
+        # 2. checkout mode: any store/dev marker makes script_dir the home
+        co = t / "checkout"
+        co.mkdir()
+        (co / "harnesses.json").write_text("{}")
+        assert hs.default_home(co) == co
+        # 3. installed mode: bare dir (site-packages) -> ~/.harness-sync
+        sp = t / "site-packages"
+        sp.mkdir()
+        assert hs.default_home(sp) == Path.home() / ".harness-sync"
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())

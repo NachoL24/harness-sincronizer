@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harness-sync"
+version = "1.0.0"
+description = "Selective sync of skills, agents, commands, MCP servers, plugins and settings between AI coding harnesses (Claude Code, Codex)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [{name = "Nacho Lances"}]
+keywords = ["claude-code", "codex", "skills", "sync", "dotfiles", "mcp"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/NachoL24/harness-sincronizer"
+Issues = "https://github.com/NachoL24/harness-sincronizer/issues"
+
+[project.scripts]
+harness-sync = "harness_sync:main"
+
+[project.optional-dependencies]
+tui = ["textual"]
+
+[tool.setuptools]
+py-modules = ["harness_sync", "harness_tui"]
