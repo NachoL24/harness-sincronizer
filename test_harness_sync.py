@@ -1511,6 +1511,25 @@ def test_default_home_resolution_modes():
         assert hs.default_home(sp) == Path.home() / ".harness-sync"
 
 
+def test_plugins_apply_points_to_the_right_commands():
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code = hs.main(["plugins", "apply"])
+    assert code == 2
+    msg = err.getvalue()
+    assert "plugins sync-apply" in msg   # whole-plugin installs
+    assert "'apply'" in msg              # plain apply for adopted skills
+
+
+def test_plugins_list_hints_at_install_sync():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _plugin_paths(Path(tmp))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            hs.cmd_plugins_list(p)
+        assert "plugins sync-list" in out.getvalue()
+
+
 if __name__ == "__main__":
     import traceback
     funcs = [v for k, v in sorted(globals().items())
@@ -1520,7 +1539,7 @@ if __name__ == "__main__":
         try:
             fn()
             print(f"PASS {fn.__name__}")
-        except Exception:
+        except (Exception, SystemExit):  # SystemExit: argparse must not kill the run
             failures += 1
             print(f"FAIL {fn.__name__}")
             traceback.print_exc()
