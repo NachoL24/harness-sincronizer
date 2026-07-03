@@ -107,7 +107,8 @@ comes from `default_home()`: `$HARNESS_SYNC_HOME` env override → checkout mode
   Harness). Requires `textual`; presentation-only layer in `harness_tui.py`,
   lazy-imported with an install hint when missing. The MCP tab needs Python
   3.11+ (shows a hint otherwise); the Apply tab includes skills, optional
-  prune, and `mcp:` pending lines.
+  prune, `mcp:` pending lines, and the `plugin:` / `settings:` config domains
+  (plugin-install sync and settings-key sync run on TUI apply too).
 - `python3.12 harness_sync.py mcp list|adopt|apply [--dry-run]` — sync global
   MCP server definitions (Claude `.claude.json` JSON ↔ Codex `config.toml`
   TOML). Needs Python 3.11+ (`tomllib`, lazily gated — the rest of the CLI

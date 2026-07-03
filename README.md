@@ -317,8 +317,8 @@ Six tabs: **Status** (color-coded state table; `u` untracks the skill under
 the cursor), **Adopt** (checkbox multi-select of untracked/drift skills),
 **Plugins** (adopt whole plugins), **MCP** (adopt MCP servers; needs Python
 3.11+, otherwise the tab shows a hint), **Apply** (review ALL pending changes —
-skills, optional prune, and `mcp:` lines — then apply), **Harness** (manage the
-registry). Selection is batch-style: tick several items, choose the targets
+skills, optional prune, `mcp:` lines, plus `plugin:` install sync and
+`settings:` key sync — then apply), **Harness** (manage the registry). Selection is batch-style: tick several items, choose the targets
 once, confirm. `r` refreshes, `q` quits, `1-6` switch tabs.
 
 Without `textual` installed, `tui` prints an install hint and exits; every
