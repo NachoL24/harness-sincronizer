@@ -10,3 +10,6 @@ __pycache__/
 /harnesses.json
 /settings-files/
 /.sync-state.json
+build/
+dist/
+*.egg-info/
