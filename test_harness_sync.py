@@ -1739,9 +1739,9 @@ def test_opencode_harness_asset_path():
         }}))
         (Path(t) / "oc").mkdir(parents=True)
         paths = hs.resolve_paths(repo)
-        # instructions kind should return None for opencode (no equivalent)
+        # opencode supports instructions kind -> AGENTS.md
         p = hs.harness_asset_path(paths, "oc", "instructions", "global.md")
-        assert p is None
+        assert p == (Path(t) / "oc" / "AGENTS.md")
 
 
 def test_opencode_skips_plugins():

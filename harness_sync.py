@@ -130,7 +130,7 @@ HARNESS_CONFIGS: dict[str, dict] = {
         "mcp_fallback": None,
         "mcp_key": "mcp",
         "mcp_format": "json",
-        "asset_names": {},
+        "asset_names": {"instructions": "AGENTS.md"},
         "claude_only_kinds": frozenset({
             "agents", "commands", "output-styles",
             "themes", "statusline", "keybindings",
