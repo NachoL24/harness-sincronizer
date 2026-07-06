@@ -765,6 +765,8 @@ def test_tui_mcp_tab_adopt():
             app = HarnessSyncApp(repo)
             async with app.run_test(size=(130, 42)) as pilot:
                 await pilot.pause()
+                app.action_tab("tab-mcp")
+                await pilot.pause()
                 table = app.query_one("#mcp-table", DataTable)
                 assert table.row_count == 1
                 servers = app.query_one("#mcp-servers", SelectionList)
@@ -775,11 +777,49 @@ def test_tui_mcp_tab_adopt():
                     opt = targets.get_option_at_index(i)
                     if opt.value == "codex":
                         targets.select(opt)
-                app.adopt_selected_mcp()
+                await pilot.click("#mcp-btn")
                 await pilot.pause()
                 man = hs.load_manifest(repo / "manifest.json")
                 assert man["mcp"]["alpha"]["targets"] == ["codex"]
                 assert man["mcp"]["alpha"]["config"] == {"command": "a"}
+
+        asyncio.run(go())
+
+
+def test_tui_mcp_targets_are_visible_in_compact_terminal():
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        return
+    if not _tomllib_available():
+        return
+    import asyncio
+    from textual.widgets import SelectionList, Button
+    from harness_tui import HarnessSyncApp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        repo = t / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "claude": {"base": str(t / "cc")}, "codex": {"base": str(t / "cx")}}}))
+        (t / "cc").mkdir(parents=True, exist_ok=True)
+        (t / "cc" / ".claude.json").write_text(json.dumps({"mcpServers": {
+            "alpha": {"command": "a"}}}))
+        (t / "cx").mkdir(parents=True, exist_ok=True)
+        (t / "cx" / "config.toml").write_text('model = "gpt"\n')
+
+        async def go():
+            app = HarnessSyncApp(repo)
+            async with app.run_test(size=(90, 30)) as pilot:
+                await pilot.pause()
+                app.action_tab("tab-mcp")
+                await pilot.pause()
+                targets = app.query_one("#mcp-targets", SelectionList)
+                assert targets.content_region.height > 0
+                assert targets.option_count >= 2
+                button = app.query_one("#mcp-btn", Button)
+                assert button.region.height >= 3
 
         asyncio.run(go())
 
@@ -1568,6 +1608,197 @@ def test_tui_apply_tab_includes_plugin_and_settings_sync():
                 assert "settings:model -> cp" in text
 
         asyncio.run(go())
+
+
+def test_harness_config_registry_returns_claude():
+    cfg = hs.get_config("claude")
+    assert cfg["mcp_file"] == ".claude.json"
+    assert cfg["mcp_key"] == "mcpServers"
+    assert cfg["mcp_format"] == "json"
+    assert cfg["supports_plugins"] is True
+    assert cfg["supports_settings"] is True
+
+
+def test_harness_config_registry_returns_codex():
+    cfg = hs.get_config("codex")
+    assert cfg["mcp_file"] == "config.toml"
+    assert cfg["mcp_key"] == "mcp_servers"
+    assert cfg["mcp_format"] == "toml"
+    assert cfg["supports_plugins"] is False
+    assert cfg["supports_settings"] is False
+
+
+def test_harness_config_registry_returns_opencode():
+    cfg = hs.get_config("opencode")
+    assert cfg["mcp_file"] == "opencode.json"
+    assert cfg["mcp_key"] == "mcp"
+    assert cfg["mcp_format"] == "json"
+    assert cfg["supports_plugins"] is False
+    assert cfg["supports_settings"] is False
+
+
+def test_harness_config_registry_unknown_raises():
+    try:
+        hs.get_config("unknown")
+        assert False, "should have raised"
+    except ValueError as e:
+        assert "Unknown harness type" in str(e)
+
+
+def test_infer_type_opencode():
+    assert hs.infer_type("opencode") == "opencode"
+    assert hs.infer_type("claude") == "claude"
+    assert hs.infer_type("codex") == "codex"
+    assert hs.infer_type("my-custom-claude") == "claude"
+
+
+def test_mcp_config_path_opencode():
+    with tempfile.TemporaryDirectory() as t:
+        base = Path(t)
+        p = hs.mcp_config_path(base, "opencode")
+        assert p == base / "opencode.json"
+
+
+def test_read_mcp_servers_opencode():
+    with tempfile.TemporaryDirectory() as t:
+        p = Path(t) / "opencode.json"
+        p.write_text(json.dumps({"mcp": {
+            "server1": {"type": "local", "command": ["npx", "-y", "my-server"]},
+            "server2": {"type": "remote", "url": "https://example.com/mcp"},
+        }}))
+        result = hs.read_mcp_servers(p, "opencode")
+        assert "server1" in result
+        assert result["server1"]["type"] == "local"
+        assert result["server1"]["command"] == ["npx", "-y", "my-server"]
+        assert "server2" in result
+        assert result["server2"]["type"] == "remote"
+
+
+def test_read_mcp_servers_opencode_missing():
+    with tempfile.TemporaryDirectory() as t:
+        p = Path(t) / "nonexistent.json"
+        result = hs.read_mcp_servers(p, "opencode")
+        assert result == {}
+
+
+def test_write_mcp_servers_opencode():
+    with tempfile.TemporaryDirectory() as t:
+        p = Path(t) / "opencode.json"
+        hs.write_mcp_servers(p, "opencode", {
+            "s1": {"type": "local", "command": ["npx"]},
+        })
+        data = json.loads(p.read_text())
+        assert "mcp" in data
+        assert data["mcp"]["s1"]["type"] == "local"
+        assert data["mcp"]["s1"]["command"] == ["npx"]
+
+
+def test_write_mcp_servers_opencode_preserves_existing():
+    with tempfile.TemporaryDirectory() as t:
+        p = Path(t) / "opencode.json"
+        p.write_text(json.dumps({"theme": "dark", "mcp": {"old": {"type": "local", "command": ["x"]}}}))
+        hs.write_mcp_servers(p, "opencode", {
+            "new": {"type": "remote", "url": "https://example.com"},
+        })
+        data = json.loads(p.read_text())
+        assert data["theme"] == "dark"
+        assert "old" in data["mcp"]
+        assert "new" in data["mcp"]
+
+
+def test_opencode_claude_only_kinds():
+    cfg = hs.get_config("opencode")
+    assert "agents" in cfg["claude_only_kinds"]
+    assert "commands" in cfg["claude_only_kinds"]
+    assert "skills" not in cfg["claude_only_kinds"]
+
+
+def test_opencode_harness_kind_dir():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "oc": {"base": str(Path(t) / "oc"), "type": "opencode"},
+        }}))
+        (Path(t) / "oc").mkdir(parents=True)
+        paths = hs.resolve_paths(repo)
+        # skills should work
+        d = hs.harness_kind_dir(paths, "oc", "skills")
+        assert d is not None
+        # agents should be blocked (claude_only for opencode)
+        d = hs.harness_kind_dir(paths, "oc", "agents")
+        assert d is None
+
+
+def test_opencode_harness_asset_path():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "oc": {"base": str(Path(t) / "oc"), "type": "opencode"},
+        }}))
+        (Path(t) / "oc").mkdir(parents=True)
+        paths = hs.resolve_paths(repo)
+        # instructions kind should return None for opencode (no equivalent)
+        p = hs.harness_asset_path(paths, "oc", "instructions", "global.md")
+        assert p is None
+
+
+def test_opencode_skips_plugins():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "manifest.json").write_text(json.dumps({
+            "plugins": {"test-plugin": {"targets": ["oc"]}},
+        }))
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "oc": {"base": str(Path(t) / "oc"), "type": "opencode"},
+        }}))
+        (Path(t) / "oc").mkdir(parents=True)
+        paths = hs.resolve_paths(repo)
+        changes = hs.plugin_sync_apply_all(paths, dry_run=True)
+        assert changes == []
+
+
+def test_opencode_skips_settings():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "manifest.json").write_text(json.dumps({
+            "settings": {"test-key": {"value": "x", "targets": ["oc"]}},
+        }))
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "oc": {"base": str(Path(t) / "oc"), "type": "opencode"},
+        }}))
+        (Path(t) / "oc").mkdir(parents=True)
+        paths = hs.resolve_paths(repo)
+        changes = hs.settings_apply_all(paths, dry_run=True)
+        assert changes == []
+
+
+def test_opencode_mcp_adopt_roundtrip():
+    with tempfile.TemporaryDirectory() as t:
+        repo = Path(t) / "repo"
+        (repo / "skills").mkdir(parents=True)
+        (repo / "manifest.json").write_text(json.dumps({}))
+        (repo / "harnesses.json").write_text(json.dumps({"harnesses": {
+            "oc": {"base": str(Path(t) / "oc"), "type": "opencode"},
+        }}))
+        oc_base = Path(t) / "oc"
+        oc_base.mkdir(parents=True)
+        (oc_base / "opencode.json").write_text(json.dumps({"mcp": {
+            "my-server": {"type": "local", "command": ["npx", "-y", "server"]},
+        }}))
+        paths = hs.resolve_paths(repo)
+        # adopt
+        hs.mcp_adopt_server(paths, "my-server", "oc", ["oc"])
+        man = json.loads(paths.manifest.read_text())
+        assert "my-server" in man.get("mcp", {})
+        assert man["mcp"]["my-server"]["config"]["type"] == "local"
+        # states should show synced
+        states = hs.mcp_states(paths)
+        my_server = [s for s in states if s["name"] == "my-server"][0]
+        assert my_server["oc"] == "synced"
 
 
 if __name__ == "__main__":

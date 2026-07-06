@@ -51,6 +51,8 @@ class HarnessSyncApp(App):
     TabbedContent { height: 1fr; }
     TabPane { padding: 1 2; }
     DataTable { height: 1fr; }
+    #mcp-table { height: 7; }
+    #mcp-targets { height: 4; }
     #status-summary { height: 1; margin-bottom: 1; }
     .picker { height: 1fr; }
     .picker SelectionList { height: 1fr; border: round $primary; }
@@ -63,6 +65,7 @@ class HarnessSyncApp(App):
     #prune-check { margin-top: 1; }
     #harness-row { height: auto; margin-top: 1; }
     #harness-name, #harness-base { width: 1fr; }
+    #harness-type { width: 18; }
     #log { height: 6; border: round $primary; margin: 0 1; }
     """
 
@@ -124,6 +127,9 @@ class HarnessSyncApp(App):
                 with Horizontal(id="harness-row"):
                     yield Input(placeholder="name", id="harness-name")
                     yield Input(placeholder="base dir (e.g. ~/.claude-perso)", id="harness-base")
+                    yield Select([("claude", "claude"), ("codex", "codex"),
+                                  ("opencode", "opencode")],
+                                 value="claude", id="harness-type")
                     yield Button("Add", id="harness-add-btn", variant="primary")
                     yield Button("Remove selected", id="harness-remove-btn", variant="error")
         yield Log(id="log")
@@ -185,12 +191,13 @@ class HarnessSyncApp(App):
         self._adoptable: dict[str, list[str]] = {}
         for kind in hs.KINDS:
             for row in hs.compute_states(self.paths, kind):
-                available = [h for h in names if row[h] in ("untracked", "drift")]
-                if not available:
+                sources = [h for h in names if row[h] in ("untracked", "drift", "synced")]
+                missing = [h for h in names if row[h] == "absent"]
+                if not sources or not missing:
                     continue
                 label = hs.format_asset_name(kind, row["name"])
-                self._adoptable[label] = available
-                detail = ", ".join(f"{h}:{row[h]}" for h in available)
+                self._adoptable[label] = sources
+                detail = ", ".join(f"{h}:{row[h]}" for h in sources)
                 skills.add_option(Selection(f"{label}  ({detail})", label))
         self._fill_targets("#adopt-targets", names)
         source = self.query_one("#adopt-source", Select)
@@ -269,10 +276,10 @@ class HarnessSyncApp(App):
             for h in names:
                 cells.append(Text(row[h], style=STATE_STYLE.get(row[h], "")))
             table.add_row(*cells)
-            available = [h for h in names if row[h] in ("untracked", "drift")]
-            if available:
-                self._mcp_adoptable[row["name"]] = available
-                detail = ", ".join(f"{h}:{row[h]}" for h in available)
+            sources = [h for h in names if row[h] in ("untracked", "drift", "synced")]
+            if sources:
+                self._mcp_adoptable[row["name"]] = sources
+                detail = ", ".join(f"{h}:{row[h]}" for h in sources)
                 servers.add_option(Selection(f"{row['name']}  ({detail})", row["name"]))
         self._fill_targets("#mcp-targets", names)
         source = self.query_one("#mcp-source", Select)
@@ -357,11 +364,12 @@ class HarnessSyncApp(App):
     def add_harness(self) -> None:
         name = self.query_one("#harness-name", Input).value.strip()
         base = self.query_one("#harness-base", Input).value.strip()
+        htype = self.query_one("#harness-type", Select).value
         if not name or not base:
             self._log("harness add: name and base are required")
             return
-        hs.harness_add(self.paths, name, base)
-        self._log(f"added harness '{name}' -> {base}")
+        hs.harness_add(self.paths, name, base, htype)
+        self._log(f"added harness '{name}' ({htype}) -> {base}")
         self.action_refresh()
 
     @on(Button.Pressed, "#harness-remove-btn")

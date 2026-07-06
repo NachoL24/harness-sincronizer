@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""harness-sync: selective skill sync between Claude Code and Codex."""
+"""harness-sync: selective skill sync between AI coding harnesses."""
 from __future__ import annotations
 
 import argparse
@@ -44,7 +44,9 @@ def load_harnesses(repo_root: Path) -> dict[str, Path]:
 
 
 def infer_type(name: str) -> str:
-    return "codex" if name == "codex" else "claude"
+    if name in HARNESS_CONFIGS:
+        return name
+    return "claude"
 
 
 def load_harness_types(repo_root: Path) -> dict[str, str]:
@@ -96,7 +98,57 @@ KINDS = {
                     "names": {"claude": "keybindings.json"}},
 }
 
+HARNESS_CONFIGS: dict[str, dict] = {
+    "claude": {
+        "mcp_file": ".claude.json",
+        "mcp_fallback": "~/.claude.json",
+        "mcp_key": "mcpServers",
+        "mcp_format": "json",
+        "asset_names": {"instructions": "CLAUDE.md"},
+        "claude_only_kinds": frozenset({
+            "agents", "commands", "output-styles",
+            "themes", "statusline", "keybindings",
+        }),
+        "supports_plugins": True,
+        "supports_settings": True,
+    },
+    "codex": {
+        "mcp_file": "config.toml",
+        "mcp_fallback": None,
+        "mcp_key": "mcp_servers",
+        "mcp_format": "toml",
+        "asset_names": {"instructions": "AGENTS.md"},
+        "claude_only_kinds": frozenset({
+            "agents", "commands", "output-styles",
+            "themes", "statusline", "keybindings",
+        }),
+        "supports_plugins": False,
+        "supports_settings": False,
+    },
+    "opencode": {
+        "mcp_file": "opencode.json",
+        "mcp_fallback": None,
+        "mcp_key": "mcp",
+        "mcp_format": "json",
+        "asset_names": {},
+        "claude_only_kinds": frozenset({
+            "agents", "commands", "output-styles",
+            "themes", "statusline", "keybindings",
+        }),
+        "supports_plugins": False,
+        "supports_settings": False,
+    },
+}
+
 FIXED_ASSET = "global.md"  # the instructions kind's logical asset name
+
+
+def get_config(htype: str) -> dict:
+    """Return the harness config for the given type."""
+    try:
+        return HARNESS_CONFIGS[htype]
+    except KeyError:
+        raise ValueError(f"Unknown harness type: {htype!r}")
 
 
 def parse_asset_name(s: str) -> tuple[str, str]:
@@ -147,7 +199,9 @@ def scan_kind(root: Path, kind: str) -> dict[str, str]:
 
 
 def harness_kind_dir(paths: Paths, harness: str, kind: str) -> Path | None:
-    if KINDS[kind]["claude_only"] and paths.harness_types[harness] == "codex":
+    htype = paths.harness_types[harness]
+    cfg = get_config(htype)
+    if kind in cfg["claude_only_kinds"] and htype != "claude":
         return None
     return paths.harness_skills[harness].parent / kind
 
@@ -158,11 +212,16 @@ def repo_kind_dir(paths: Paths, kind: str) -> Path:
 
 def harness_asset_path(paths: Paths, harness: str, kind: str, name: str) -> Path | None:
     spec = KINDS[kind]
-    if spec["claude_only"] and paths.harness_types[harness] == "codex":
+    htype = paths.harness_types[harness]
+    cfg = get_config(htype)
+    if kind in cfg["claude_only_kinds"] and htype != "claude":
         return None
     base = paths.harness_skills[harness].parent
     if "names" in spec:
-        return base / spec["names"][paths.harness_types[harness]]
+        asset_name = cfg["asset_names"].get(kind) or spec["names"].get(htype)
+        if asset_name is None:
+            return None
+        return base / asset_name
     return base / kind / name
 
 
@@ -279,23 +338,26 @@ def _require_tomllib():
 
 
 def mcp_config_path(base: Path, htype: str) -> Path:
-    if htype == "codex":
-        return base / "config.toml"
-    p = base / ".claude.json"
+    cfg = get_config(htype)
+    p = base / cfg["mcp_file"]
     if p.exists():
         return p
-    if base == Path.home() / ".claude":
-        return Path.home() / ".claude.json"
+    fallback = cfg.get("mcp_fallback")
+    if fallback:
+        fb = Path(fallback).expanduser()
+        if fb.exists():
+            return fb
     return p
 
 
 def read_mcp_servers(path: Path, htype: str) -> dict[str, dict]:
     if not path.exists():
         return {}
-    if htype == "codex":
+    cfg = get_config(htype)
+    if cfg["mcp_format"] == "toml":
         tomllib = _require_tomllib()
-        return tomllib.loads(path.read_text()).get("mcp_servers", {})
-    return json.loads(path.read_text()).get("mcpServers", {})
+        return tomllib.loads(path.read_text()).get(cfg["mcp_key"], {})
+    return json.loads(path.read_text()).get(cfg["mcp_key"], {})
 
 
 def _toml_value(v) -> str:
@@ -340,16 +402,36 @@ def _strip_mcp_blocks(text: str, names: set[str]) -> str:
     return "".join(out)
 
 
+def _adapt_mcp_server_for_harness(htype: str, cfg: dict) -> dict:
+    """Adapt server config to the target harness format."""
+    out = dict(cfg)
+    if htype == "opencode":
+        out.setdefault("type", "local")
+        out.setdefault("enabled", True)
+        out.setdefault("environment", {})
+        # command must be array in opencode
+        cmd = out.get("command")
+        if isinstance(cmd, str):
+            out["command"] = [cmd]
+            # move args into command array
+            args = out.pop("args", None)
+            if args:
+                out["command"].extend(args)
+    return out
+
+
 def write_mcp_servers(path: Path, htype: str, servers: dict[str, dict]) -> None:
-    if htype == "codex":
+    cfg = get_config(htype)
+    adapted = {n: _adapt_mcp_server_for_harness(htype, c) for n, c in servers.items()}
+    if cfg["mcp_format"] == "toml":
         _require_tomllib()  # version gate before touching anything
         text = path.read_text() if path.exists() else ""
         text = _strip_mcp_blocks(text, set(servers)).rstrip("\n")
-        blocks = "\n".join(_toml_server_block(n, c) for n, c in sorted(servers.items()))
+        blocks = "\n".join(_toml_server_block(n, c) for n, c in sorted(adapted.items()))
         path.write_text((text + "\n\n" if text else "") + blocks)
     else:
         data = json.loads(path.read_text()) if path.exists() else {}
-        data.setdefault("mcpServers", {}).update(servers)
+        data.setdefault(cfg["mcp_key"], {}).update(adapted)
         path.write_text(json.dumps(data, indent=2) + "\n")
 
 
@@ -417,6 +499,14 @@ def import_skill(paths: Paths, name: str, src_dir: Path, targets: list[str],
 
 def adopt_skill(paths: Paths, name: str, source_harness: str, targets: list[str],
                 kind: str = "skills") -> None:
+    repo_dir = repo_kind_dir(paths, kind) / name
+    if repo_dir.exists():
+        man = load_manifest(paths.manifest)
+        existing = man.get(kind, {}).get(name, {}).get("targets", [])
+        merged = list(dict.fromkeys(existing + targets))
+        man.setdefault(kind, {})[name] = {"targets": merged}
+        save_manifest(paths.manifest, man)
+        return
     src = harness_asset_path(paths, source_harness, kind, name)
     import_skill(paths, name, src, targets, kind)
     record_synced(paths, kind, name, source_harness,
@@ -427,7 +517,15 @@ def adopt_plugin(paths: Paths, plugin: dict, targets: list[str]) -> tuple[list[s
     adopted: list[str] = []
     skipped: list[str] = []
     for name, src in plugin["skills"]:
-        if (paths.repo_skills / name).exists():
+        repo_dir = paths.repo_skills / name
+        if repo_dir.exists():
+            man = load_manifest(paths.manifest)
+            tracked = man.get("skills", {}).get(name)
+            if tracked:
+                existing = tracked.get("targets", [])
+                merged = list(dict.fromkeys(existing + targets))
+                man["skills"][name]["targets"] = merged
+                save_manifest(paths.manifest, man)
             skipped.append(name)
             continue
         import_skill(paths, name, src, targets)
@@ -616,6 +714,26 @@ def _mcp_harness_servers(paths: Paths) -> dict[str, dict[str, dict]]:
     return result
 
 
+def _normalize_mcp_config(cfg: dict) -> dict:
+    """Normalize MCP config to canonical internal format for comparison."""
+    out = dict(cfg)
+    # opencode uses array command, normalize to string + args
+    cmd = out.get("command")
+    if isinstance(cmd, list) and cmd:
+        out["command"] = cmd[0]
+        if len(cmd) > 1:
+            out["args"] = cmd[1:]
+        else:
+            out.pop("args", None)
+    # opencode uses "environment", we use "env"
+    if "environment" in out:
+        out["env"] = out.pop("environment")
+    # remove harness-specific fields
+    out.pop("type", None)
+    out.pop("enabled", None)
+    return out
+
+
 def mcp_states(paths: Paths) -> list[dict]:
     man = load_manifest(paths.manifest).get("mcp", {})
     harness = _mcp_harness_servers(paths)
@@ -630,7 +748,7 @@ def mcp_states(paths: Paths) -> list[dict]:
                 row[h] = "absent"
             elif tracked is None:
                 row[h] = "untracked"
-            elif cfg == tracked["config"]:
+            elif _normalize_mcp_config(cfg) == _normalize_mcp_config(tracked["config"]):
                 row[h] = "synced"
             else:
                 row[h] = "drift"
@@ -639,11 +757,16 @@ def mcp_states(paths: Paths) -> list[dict]:
 
 
 def mcp_adopt_server(paths: Paths, name: str, source_harness: str, targets: list[str]) -> None:
-    htype = paths.harness_types[source_harness]
-    servers = read_mcp_servers(
-        mcp_config_path(paths.harness_skills[source_harness].parent, htype), htype)
     man = load_manifest(paths.manifest)
-    man.setdefault("mcp", {})[name] = {"targets": list(targets), "config": servers[name]}
+    tracked = man.get("mcp", {}).get(name)
+    if tracked and "config" in tracked:
+        config = tracked["config"]
+    else:
+        htype = paths.harness_types[source_harness]
+        servers = read_mcp_servers(
+            mcp_config_path(paths.harness_skills[source_harness].parent, htype), htype)
+        config = servers[name]
+    man.setdefault("mcp", {})[name] = {"targets": list(targets), "config": config}
     save_manifest(paths.manifest, man)
 
 
@@ -685,6 +808,16 @@ def read_settings(path: Path) -> dict:
 
 def _claude_harnesses(paths: Paths) -> list[str]:
     return [h for h in paths.harness_skills if paths.harness_types[h] == "claude"]
+
+
+def _plugin_capable_harnesses(paths: Paths) -> list[str]:
+    return [h for h in paths.harness_skills
+            if get_config(paths.harness_types[h]).get("supports_plugins")]
+
+
+def _settings_capable_harnesses(paths: Paths) -> list[str]:
+    return [h for h in paths.harness_skills
+            if get_config(paths.harness_types[h]).get("supports_settings")]
 
 
 def _harness_base(paths: Paths, harness: str) -> Path:
@@ -751,7 +884,7 @@ def plugin_sync_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
             continue
         mname = key.split("@", 1)[1] if "@" in key else key
         for t in targets:
-            if t not in paths.harness_skills or paths.harness_types[t] != "claude":
+            if t not in paths.harness_skills or not get_config(paths.harness_types[t]).get("supports_plugins"):
                 print(f"warning: plugin '{key}' targets non-claude or unknown "
                       f"harness '{t}' — skipping", file=sys.stderr)
                 continue
@@ -895,7 +1028,7 @@ def settings_apply_all(paths: Paths, dry_run: bool = False) -> list[str]:
         if "ignore" in targets:
             continue
         for t in targets:
-            if t not in paths.harness_skills or paths.harness_types[t] != "claude":
+            if t not in paths.harness_skills or not get_config(paths.harness_types[t]).get("supports_settings"):
                 print(f"warning: settings key '{key}' targets non-claude or "
                       f"unknown harness '{t}' — skipping", file=sys.stderr)
                 continue
